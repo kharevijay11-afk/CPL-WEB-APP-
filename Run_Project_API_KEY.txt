@@ -1,0 +1,66 @@
+supabase
+
+step - 1
+
+1.1 project setting--->Publised Api Key---->
+	sb_publishable_PF2x2vLOjgBYs5ZprHjxRw_-GHoURWy
+
+1.2 Project setting--->Data API--->API URL ---
+	https://xdztpylkfrchrrbwdmnj.supabase.co/rest/v1/
+
+Note -Final --> last se remove karenge ( /rest/v1/ )
+	https://xdztpylkfrchrrbwdmnj.supabase.co
+	
+========================
+1-----Final .env File 
+
+VITE_SUPABASE_URL=https://xdztpylkfrchrrbwdmnj.supabase.co
+
+VITE_SUPABASE_ANON_KEY=sb_publishable_PF2x2vLOjgBYs5ZprHjxRw_-GHoURWy
+
+===============================================
+
+ID - fms system
+Password -Fms_system07744*
+=============================
+Project setting--->
+
+project ID - eytbzdinkjjnkpyajrne
+
+API Key - sb_publishable_X_o38nMi8mLDWLV5ndPUUA_Dh_QW46m
+
+=====================
+.env
+VITE_SUPABASE_URL=https://eytbzdinkjjnkpyajrne.supabase.co
+VITE_SUPABASE_ANON_KEY=anon_public_key_yahan_paste_karo
+
+https://czpxoqfvgxtmfpscsjdq.supabase.co/rest/v1/
+
+=================
+main backend setup karne ke liye supabase ka istemal kar raha hun. our main iske liye sara data provid kar raha hun. main chata hun ki jo mera student admition form and fees collection form ka all data supabase se conect ho kar uske ander store ho jai. is ke liye main all key provied kar raha hun. project ID - eytbzdinkjjnkpyajrne
+==============================
+
+start supabase surver
+win + R
+powershell
+
+cd "F:\CPL APP RJN"
+
+npm run dev
+browser main - http://127.0.0.1:5173/
+
+http://127.0.0.1:5174/
+
+project setting --->Authentication---Add user---
+Admin ID: admin
+Password: admin123
+
+Athentication s UID Type karo ------ 
+
+isko sql main run karo
+
+insert into public.admin_users (user_id, display_name)
+values ('09ee3240-cfb3-481e-b2c8-4a2f931a4419', 'Auction Admin');
+
+
+supabase stop
