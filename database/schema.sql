@@ -98,7 +98,7 @@ create table if not exists public.auction_logs (
 
 create table if not exists public.tournament_settings (
   tournament_id bigint primary key references public.tournaments(id) on delete cascade,
-  team_count integer not null default 8 check (team_count in (2, 4, 8, 10, 12, 14, 16)),
+  team_count integer not null default 8 check (team_count > 0 and team_count <= 64),
   currency_mode text not null default 'Points' check (currency_mode in ('Points', 'INR')),
   current_player_id bigint references public.players(id) on delete set null,
   current_bid_amount numeric(12, 2) not null default 0,
@@ -110,6 +110,58 @@ create table if not exists public.website_content (
   tournament_id bigint primary key references public.tournaments(id) on delete cascade,
   content jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.app_config (
+  key text primary key,
+  value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.app_config (key, value)
+values ('visitor_count', jsonb_build_object('value', 100))
+on conflict (key) do nothing;
+
+create or replace function public.increment_visitor_count()
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  next_count bigint;
+begin
+  insert into public.app_config as config (key, value, updated_at)
+  values ('visitor_count', jsonb_build_object('value', 101), now())
+  on conflict (key) do update
+  set value = jsonb_build_object(
+        'value',
+        greatest(
+          100,
+          case
+            when coalesce(config.value ->> 'value', '') ~ '^\d+$'
+              then (config.value ->> 'value')::bigint
+            else 100
+          end
+        ) + 1
+      ),
+      updated_at = now()
+  returning (value ->> 'value')::bigint into next_count;
+
+  return next_count;
+end;
+$$;
+
+revoke all on function public.increment_visitor_count() from public;
+grant execute on function public.increment_visitor_count() to anon, authenticated;
+
+create table if not exists public.owner_passes (
+  id bigint generated always as identity primary key,
+  tournament_id bigint not null references public.tournaments(id) on delete cascade,
+  player_id bigint not null references public.players(id) on delete cascade,
+  team_id bigint not null references public.teams(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  constraint owner_passes_unique unique (tournament_id, player_id, team_id)
 );
 
 create table if not exists public.matches (

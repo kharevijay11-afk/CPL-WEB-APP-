@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import Cropper from 'react-easy-crop';
+import 'react-easy-crop/react-easy-crop.css';
 import {
   Activity,
+  ArrowLeft,
   BadgeIndianRupee,
   Banknote,
   Camera,
@@ -15,6 +18,7 @@ import {
   ListChecks,
   LogOut,
   Mail,
+  Menu,
   MapPin,
   MonitorUp,
   Pencil,
@@ -32,11 +36,13 @@ import {
   User,
   UserPlus,
   Users,
-  WalletCards
+  WalletCards,
+  X
 } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './lib/supabase';
 
-const allowedTeamCounts = [2, 4, 8, 10, 12, 14, 16];
+const suggestedTeamCounts = [2, 4, 8, 10, 12, 14, 16, 20, 24, 32];
+const defaultTeamLimit = 16;
 const blankTeam = {
   team_name: '',
   owner_name: '',
@@ -44,7 +50,7 @@ const blankTeam = {
   owner_pin: '',
   total_budget: '100000',
   remaining_budget: '100000',
-  max_players: '16'
+  max_players: ''
 };
 const defaultPlayerCriteria = 'Silver Player';
 
@@ -71,6 +77,7 @@ const blankTournament = {
   name: '',
   start_date: '',
   end_date: '',
+  auction_end_date: '',
   address: '',
   logo_url: '',
   description: ''
@@ -99,6 +106,7 @@ const defaultWebsiteContent = {
     phone_2: '',
     email: ''
   },
+  payment_qr_url: '',
   testimonials: [
     { name: 'Team Owner', text: 'Auction room, purse tracking aur player registration ek hi jagah manage ho jata hai.', image_url: '' },
     { name: 'Player', text: 'Registration simple hai, aur auction status live dashboard par turant dikhta hai.', image_url: '' },
@@ -112,9 +120,19 @@ const tshirtSizes = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 const photoBucket = 'cpl-player-photos';
 const bidIncrement = 1000;
 const auctionResultDisplayMs = 4000;
+const defaultPassportCrop = { x: 0, y: 0, zoom: 1.08, croppedAreaPixels: null };
+const passportAspectRatio = 3 / 4;
+const passportPhotoWidth = 360;
+const passportPhotoHeight = 480;
+const passportPhotoPadding = 32;
+const passportBackgroundColor = '#ffffff';
 const fixedAdminId = 'admin';
 const fixedAdminPassword = 'admin123';
 const fixedAdminEmail = 'admin@cpl.com';
+const fixedSubAdminId = 'subadmin';
+const fixedSubAdminPassword = '12345';
+const sharedVisitorCounterKey = 'visitor_count';
+const sharedVisitorSessionKey = 'cpl-shared-visitor-counted';
 
 function digitsOnly(value) {
   return String(value || '').replace(/\D/g, '').slice(0, 10);
@@ -237,11 +255,24 @@ function formatDateRange(startDate, endDate) {
   return start || end || 'Dates to be announced';
 }
 
+function localDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function isAuctionRegistrationClosed(tournament) {
+  if (!tournament?.auction_end_date) return false;
+  return localDateString() > tournament.auction_end_date;
+}
+
 function tournamentToForm(tournament) {
   return {
     name: tournament?.name || '',
     start_date: tournament?.start_date || '',
     end_date: tournament?.end_date || '',
+    auction_end_date: tournament?.auction_end_date || '',
     address: tournament?.address || '',
     logo_url: tournament?.logo_url || '',
     description: tournament?.description || ''
@@ -306,6 +337,7 @@ function mergeWebsiteContent(content = {}) {
     popup: { ...defaultWebsiteContent.popup, ...(content.popup || {}) },
     about: { ...defaultWebsiteContent.about, ...(content.about || {}) },
     contact: { ...defaultWebsiteContent.contact, ...(content.contact || {}) },
+    payment_qr_url: content.payment_qr_url || '',
     testimonials: Array.isArray(content.testimonials) && content.testimonials.length
       ? content.testimonials
       : defaultWebsiteContent.testimonials,
@@ -568,26 +600,397 @@ async function imageFileToCompressedDataUrl(file, maxWidth = 900, maxHeight = 12
   }
 }
 
+async function imageFileToPassportDataUrl(file, crop = defaultPassportCrop) {
+  if (!file) return null;
+  if (!file.type?.startsWith('image/')) {
+    throw new Error('Please upload image files only.');
+  }
+
+  const originalUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Selected image could not be read.'));
+      img.src = originalUrl;
+    });
+
+    const frameWidth = passportPhotoWidth - passportPhotoPadding * 2;
+    const frameHeight = passportPhotoHeight - passportPhotoPadding * 2;
+    const area = crop?.croppedAreaPixels;
+    let sourceX;
+    let sourceY;
+    let sourceWidth;
+    let sourceHeight;
+
+    if (area?.width && area?.height) {
+      sourceX = area.x;
+      sourceY = area.y;
+      sourceWidth = area.width;
+      sourceHeight = area.height;
+    } else {
+      const zoom = Math.min(2.5, Math.max(1, Number(crop.zoom) || 1));
+      sourceWidth = image.width;
+      sourceHeight = sourceWidth / passportAspectRatio;
+      if (sourceHeight > image.height) {
+        sourceHeight = image.height;
+        sourceWidth = sourceHeight * passportAspectRatio;
+      }
+      sourceWidth /= zoom;
+      sourceHeight /= zoom;
+      sourceX = Math.max(0, (image.width - sourceWidth) / 2);
+      sourceY = Math.max(0, (image.height - sourceHeight) / 2);
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = passportPhotoWidth;
+    canvas.height = passportPhotoHeight;
+    const context = canvas.getContext('2d');
+    context.fillStyle = passportBackgroundColor;
+    context.fillRect(0, 0, passportPhotoWidth, passportPhotoHeight);
+    context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, passportPhotoPadding, passportPhotoPadding, frameWidth, frameHeight);
+    return canvas.toDataURL('image/jpeg', 0.64);
+  } finally {
+    URL.revokeObjectURL(originalUrl);
+  }
+}
+
 function formatSaveError(error) {
   const parts = [error?.message, error?.details, error?.hint, error?.code].filter(Boolean);
   return friendlyUploadError(parts.join(' | '));
 }
 
+async function readGatePassword(configKey, fallbackPassword) {
+  try {
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', configKey)
+      .maybeSingle();
+    if (error) throw error;
+    return String(data?.value?.value ?? data?.value ?? fallbackPassword);
+  } catch {
+    return fallbackPassword;
+  }
+}
+
+async function saveGatePassword(configKey, nextPassword) {
+  return supabase
+    .from('app_config')
+    .upsert(
+      { key: configKey, value: { value: nextPassword }, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
+}
+
+function readAdminGatePassword() {
+  return readGatePassword('admin_password', fixedAdminPassword);
+}
+
+function readSubAdminGatePassword() {
+  return readGatePassword('subadmin_password', fixedSubAdminPassword);
+}
+
+function saveAdminGatePassword(nextPassword) {
+  return saveGatePassword('admin_password', nextPassword);
+}
+
+function saveSubAdminGatePassword(nextPassword) {
+  return saveGatePassword('subadmin_password', nextPassword);
+}
+
+function whatsappPhoneNumber(value) {
+  const phone = numericText(value);
+  if (phone.length === 10) return `91${phone}`;
+  return phone;
+}
+
+function visitorCountFromConfig(value, fallback = 100) {
+  const count = Number(value?.value ?? value);
+  return Number.isFinite(count) && count >= 100 ? Math.trunc(count) : fallback;
+}
+
+async function readSharedVisitorCount() {
+  const { data, error } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', sharedVisitorCounterKey)
+    .maybeSingle();
+  if (error) throw error;
+  return visitorCountFromConfig(data?.value);
+}
+
+async function incrementSharedVisitorCount() {
+  const { data: rpcValue, error: rpcError } = await supabase.rpc('increment_visitor_count');
+  if (!rpcError) return visitorCountFromConfig(rpcValue, 101);
+
+  // Existing installs can increment safely before the optional RPC migration is applied.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data: currentRow, error: readError } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', sharedVisitorCounterKey)
+      .maybeSingle();
+    if (readError) throw readError;
+
+    if (!currentRow) {
+      const { data: insertedRow, error: insertError } = await supabase
+        .from('app_config')
+        .insert({ key: sharedVisitorCounterKey, value: { value: 101 }, updated_at: new Date().toISOString() })
+        .select('value')
+        .maybeSingle();
+      if (!insertError && insertedRow) return visitorCountFromConfig(insertedRow.value, 101);
+      continue;
+    }
+
+    const currentCount = visitorCountFromConfig(currentRow.value);
+    const nextCount = currentCount + 1;
+    const { data: updatedRow, error: updateError } = await supabase
+      .from('app_config')
+      .update({ value: { value: nextCount }, updated_at: new Date().toISOString() })
+      .eq('key', sharedVisitorCounterKey)
+      .contains('value', { value: currentCount })
+      .select('value')
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (updatedRow) return visitorCountFromConfig(updatedRow.value, nextCount);
+  }
+
+  return readSharedVisitorCount();
+}
+
+function whatsappSentMap(player) {
+  const stats = parseStats(player?.stats);
+  return stats.whatsapp_messages || {};
+}
+
+function playerPaidAmount(player) {
+  return toNumber(playerMeta(player, 'paid_amount'));
+}
+
+function playerRequiredAmount(player) {
+  return Math.max(0, toNumber(player?.base_price));
+}
+
+function playerDueAmount(player) {
+  return Math.max(0, playerRequiredAmount(player) - playerPaidAmount(player));
+}
+
+function playerWhatsappMessage(player, type, settings) {
+  const name = titleCase(player?.full_name || 'Player');
+  const paidAmount = playerPaidAmount(player);
+  const requiredAmount = playerRequiredAmount(player);
+  const dueAmount = playerDueAmount(player);
+  const currencyMode = settings?.currency_mode || 'Points';
+
+  if (type === 'registration') {
+    return `नमस्ते ${name} जी, आपका CPL Tournament में player registration सफल हो गया है. धन्यवाद.`;
+  }
+  if (type === 'paid') {
+    return `नमस्ते ${name} जी, टूर्नामेंट की निर्धारित राशि ${formatMoney(requiredAmount, currencyMode)} पूरी जमा हो गई है। आपकी भुगतान पुष्टि सफल रही। धन्यवाद।`;
+  }
+  return `नमस्ते ${name} जी, आपकी जमा राशि ${formatMoney(paidAmount, currencyMode)} प्राप्त हुई है। टूर्नामेंट की निर्धारित राशि में से ${formatMoney(dueAmount, currencyMode)} शेष है। कृपया बाकी राशि जमा करें। धन्यवाद।`;
+}
+
 function App() {
+  if (window.location.pathname.replace(/\/+$/, '') === '/demo') {
+    return <DemoApp />;
+  }
+  return <MainApp />;
+}
+
+function createDemoData() {
+  const demoTournament = {
+    id: 9001,
+    name: 'Demo Premier League 2026',
+    start_date: '2026-09-22',
+    end_date: '2026-09-30',
+    auction_end_date: '2026-09-30',
+    address: 'Demo Cricket Ground, Rajnandgaon',
+    description: 'Read-only demo tournament for CPL Auction Software.'
+  };
+  const demoTeams = [
+    { id: 1, team_name: 'VCK Club', owner_name: 'Owner 1', owner_mobile: '9000000001', total_budget: 100000, remaining_budget: 82000, max_players: 16 },
+    { id: 2, team_name: 'Ramesh 11', owner_name: 'Owner 2', owner_mobile: '9000000002', total_budget: 100000, remaining_budget: 76000, max_players: 16 },
+    { id: 3, team_name: 'NV 11', owner_name: 'Owner 3', owner_mobile: '9000000003', total_budget: 100000, remaining_budget: 90000, max_players: 16 },
+    { id: 4, team_name: '11 Star Chikhali', owner_name: 'Owner 4', owner_mobile: '9000000004', total_budget: 100000, remaining_budget: 68000, max_players: 16 }
+  ];
+  const demoPlayers = [
+    { id: 1, full_name: 'Demo All Rounder', mobile_number: '9999990001', photo_url: '/demo-players/demo-all-rounder.png', category: 'All-rounder', base_price: 1000, sold_status: 'Sold', assigned_team_id: 1, final_bid_price: 18000, stats: JSON.stringify({ player_criteria: 'Silver Player' }) },
+    { id: 2, full_name: 'Demo Batsman', mobile_number: '9999990002', photo_url: '/demo-players/demo-batsman.png', category: 'Batsman', base_price: 1000, sold_status: 'Sold', assigned_team_id: 2, final_bid_price: 24000, stats: JSON.stringify({ player_criteria: 'Gold Player' }) },
+    { id: 3, full_name: 'Demo Bowler', mobile_number: '9999990003', photo_url: '/demo-players/demo-bowler.png', category: 'Bowler', base_price: 1000, sold_status: 'Available', assigned_team_id: null, final_bid_price: 0, stats: JSON.stringify({ player_criteria: 'Bronze Player' }) },
+    { id: 4, full_name: 'Demo Wicket Keeper', mobile_number: '9999990004', photo_url: '/demo-players/demo-wicket-keeper.png', category: 'Wicket Keeper', base_price: 1000, sold_status: 'Sold', assigned_team_id: 4, final_bid_price: 32000, stats: JSON.stringify({ player_criteria: 'Platinum Player' }) }
+  ];
+  const demoSettings = {
+    team_count: demoTeams.length,
+    currency_mode: 'Points',
+    current_player_id: 3,
+    current_bid_amount: 1000,
+    current_highest_team_id: null
+  };
+  const demoWebsiteContent = mergeWebsiteContent({
+    hero: {
+      eyebrow: 'Demo Version',
+      title: 'CPL Auction Software Demo',
+      lead: 'Public website, match schedule, gallery, projector, and auction screens ka read-only demo.'
+    },
+    popup: { enabled: false, title: '', message: '', button_label: 'Register Now' },
+    about: {
+      eyebrow: 'Demo Access',
+      title: 'Client ko safe demo dikhane ke liye',
+      body: 'Is demo link me sample data dikhega. Login, registration, upload, aur database save disabled rakha gaya hai.'
+    },
+    contact: {
+      title: 'CPL Demo Desk',
+      address: demoTournament.address,
+      phone_1: '9000000000',
+      phone_2: '',
+      email: 'demo@cpl-auction.local'
+    },
+    gallery: [
+      { image_url: '/create-computer-logo.jpeg', title: 'CPL Demo', caption: 'Protected preview' }
+    ],
+    testimonials: [
+      { name: 'Demo Owner', text: 'Auction room, purse, and team roster preview ek jagah milta hai.', image_url: '' },
+      { name: 'Demo Admin', text: 'Pamphlet aur schedule auto data se ready hota hai.', image_url: '' },
+      { name: 'Demo Player', text: 'Mobile view compact aur registration flow simple hai.', image_url: '' }
+    ],
+    pamphlet_draft: {
+      tournamentName: demoTournament.name,
+      subTitle: 'Tennis Ball Cricket Tournament',
+      cupTitle: '30 Yard Cup 2026',
+      venue: demoTournament.address,
+      startDate: demoTournament.start_date,
+      firstMatchTime: '07:00',
+      matchGapMinutes: 30,
+      perDayMatches: 1,
+      sundayMatches: 2,
+      playoffStartDate: '2026-09-28',
+      playoffMatches: 3,
+      playoffPerDayMatches: 2,
+      entryFee: '2000',
+      firstPrize: '7000',
+      secondPrize: '3500',
+      formatRules: '7 Over Match\n2 Bowler 2-2 Over\n3 Bowler 1-1 Over\nOnly 1 Match Per Day\nSunday 2 Matches\nUmpire Decision Final',
+      awardLines: 'Man of the Match - 1000\nMatch of the Tournament - 1000\nBest Bowler - 500\nBest Batsman - 500\nBest Catch - 500',
+      footerNote: 'Demo schedule only'
+    }
+  });
+
+  return {
+    tournaments: [demoTournament],
+    tournament: demoTournament,
+    settings: demoSettings,
+    teams: demoTeams,
+    players: demoPlayers,
+    logs: [
+      { id: 1, player_id: 1, team_id: 1, bid_amount: 18000, created_at: new Date().toISOString() },
+      { id: 2, player_id: 2, team_id: 2, bid_amount: 24000, created_at: new Date().toISOString() }
+    ],
+    websiteContent: demoWebsiteContent
+  };
+}
+
+function DemoNotice({ view, setView }) {
+  return (
+    <section className="panel form-panel demo-notice-panel">
+      <p className="eyebrow">Demo Version</p>
+      <h1>Read-only demo active hai</h1>
+      <p>
+        Is demo link par login, registration, upload, aur database save disabled hai.
+        Client ko software ka preview dikhane ke liye sample data use ho raha hai.
+      </p>
+      <div className="button-row">
+        <button className="primary-button" type="button" onClick={() => setView('home')}>
+          <ArrowLeft size={18} /> Demo Home
+        </button>
+        <button className="ghost-button" type="button" onClick={() => setView('projector')}>
+          <MonitorUp size={18} /> Projector Preview
+        </button>
+      </div>
+      <small>Current section: {view}</small>
+    </section>
+  );
+}
+
+function DemoApp() {
+  const demoData = useMemo(() => createDemoData(), []);
   const [view, setView] = useState('home');
+  const [message, setMessage] = useState('');
+  const currentPlayer = demoData.players.find((player) => player.id === demoData.settings.current_player_id);
+  const highestTeam = demoData.teams.find((team) => team.id === demoData.settings.current_highest_team_id);
+
+  function showDemoNotice(nextView) {
+    setMessage('Demo version read-only hai. Save/login disabled hai.');
+    setView(nextView);
+  }
+
+  if (view === 'home') {
+    return (
+      <>
+        <PlayerCriteriaDatalist />
+        {message && <Toast message={message} onClose={() => setMessage('')} />}
+        <PublicWebsite
+          tournament={demoData.tournament}
+          websiteContent={demoData.websiteContent}
+          settings={demoData.settings}
+          teams={demoData.teams}
+          players={demoData.players}
+          selectedTournamentId={demoData.tournament.id}
+          setMessage={setMessage}
+          setView={showDemoNotice}
+          demoMode
+          disableRegistration
+        />
+      </>
+    );
+  }
+
+  return (
+    <Shell
+      view={view}
+      setView={showDemoNotice}
+      onBack={() => setView('home')}
+      tournaments={demoData.tournaments}
+      selectedTournamentId={demoData.tournament.id}
+      selectTournament={() => setMessage('Demo version me tournament change disabled hai.')}
+    >
+      <PlayerCriteriaDatalist />
+      {message && <Toast message={message} onClose={() => setMessage('')} />}
+      {view === 'projector' ? (
+        <ProjectorView
+          teams={demoData.teams}
+          settings={demoData.settings}
+          currentPlayer={currentPlayer}
+          highestTeam={highestTeam}
+          logs={demoData.logs}
+          auctionResult={null}
+          players={demoData.players}
+        />
+      ) : (
+        <DemoNotice view={view} setView={setView} />
+      )}
+    </Shell>
+  );
+}
+
+function MainApp() {
+  const [view, setView] = useState('home');
+  const [viewHistory, setViewHistory] = useState([]);
   const [adminSession, setAdminSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminRole, setAdminRole] = useState(() => sessionStorage.getItem('cpl-admin-role') || 'admin');
   const [tournaments, setTournaments] = useState([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState(() => {
     const saved = localStorage.getItem('cpl-selected-tournament-id');
     return saved ? Number(saved) : null;
   });
   const [playerSession, setPlayerSession] = useState(() => {
-    const saved = localStorage.getItem('cpl-player-session');
+    const saved = sessionStorage.getItem('cpl-player-session');
     return saved ? JSON.parse(saved) : null;
   });
   const [ownerSession, setOwnerSession] = useState(() => {
-    const saved = localStorage.getItem('cpl-owner-session');
+    const saved = sessionStorage.getItem('cpl-owner-session');
     return saved ? JSON.parse(saved) : null;
   });
   const [loading, setLoading] = useState(true);
@@ -602,6 +1005,7 @@ function App() {
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [ownerPasses, setOwnerPasses] = useState([]);
   const [websiteContent, setWebsiteContent] = useState(defaultWebsiteContent);
   const [auctionResult, setAuctionResult] = useState(null);
 
@@ -640,12 +1044,16 @@ function App() {
 
     const channel = supabase
       .channel('cpl-auction-room')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, loadTournaments)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tournaments' }, () => loadTournamentsAndCurrentData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'teams' }, () => loadTeams(selectedTournamentId))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'players' }, () => loadPlayers(selectedTournamentId))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'auction_logs' }, () => loadLogs(selectedTournamentId))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'owner_passes' }, () => loadOwnerPasses(selectedTournamentId, settings.current_player_id))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tournament_settings' }, () => loadSettings(selectedTournamentId))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'website_content' }, () => loadWebsiteContent(selectedTournamentId))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config' }, () => {
+        loadTournamentsAndCurrentData();
+      })
       .subscribe();
 
     return () => {
@@ -659,10 +1067,22 @@ function App() {
   }, [selectedTournamentId]);
 
   useEffect(() => {
+    if (!selectedTournamentId || !settings.current_player_id) {
+      setOwnerPasses([]);
+      return;
+    }
+    loadOwnerPasses(selectedTournamentId, settings.current_player_id);
+  }, [selectedTournamentId, settings.current_player_id]);
+
+  useEffect(() => {
     if (!auctionResult) return undefined;
     const timer = setTimeout(() => setAuctionResult(null), auctionResultDisplayMs);
     return () => clearTimeout(timer);
   }, [auctionResult]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [view]);
 
   async function checkAdmin(session) {
     if (!session?.user) {
@@ -681,8 +1101,8 @@ function App() {
 
   async function loadTournamentsAndCurrentData() {
     const tournamentList = await loadTournaments();
-    const saved = Number(localStorage.getItem('cpl-selected-tournament-id'));
-    const selected = tournamentList.find((item) => item.id === saved) || tournamentList[0];
+    const activeTournamentId = await readAppConfigNumber('active_tournament_id');
+    const selected = tournamentList.find((item) => item.id === activeTournamentId) || tournamentList[0];
 
     if (!selected) {
       setSelectedTournamentId(null);
@@ -695,6 +1115,7 @@ function App() {
       setTeams([]);
       setPlayers([]);
       setLogs([]);
+      setOwnerPasses([]);
       setWebsiteContent(defaultWebsiteContent);
       return;
     }
@@ -704,12 +1125,30 @@ function App() {
     await loadAll(selected.id);
   }
 
+  async function readAppConfigNumber(key) {
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle();
+    if (error) return null;
+    return toNumber(data?.value?.value ?? data?.value, null);
+  }
+
+  async function writeAppConfig(key, value) {
+    const { error } = await supabase
+      .from('app_config')
+      .upsert({ key, value: { value }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    return error;
+  }
+
+
   async function loadTournaments() {
     const { data, error } = await supabase
       .from('tournaments')
       .select('*')
-      .order('start_date', { ascending: false })
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('start_date', { ascending: false });
 
     if (error) {
       setMessage(`Tournament table missing. Run database/add-tournament-management.sql in Supabase SQL Editor. Detail: ${error.message}`);
@@ -724,8 +1163,9 @@ function App() {
     const nextId = Number(tournamentId);
     setSelectedTournamentId(nextId);
     localStorage.setItem('cpl-selected-tournament-id', String(nextId));
-    localStorage.removeItem('cpl-player-session');
-    localStorage.removeItem('cpl-owner-session');
+    writeAppConfig('active_tournament_id', nextId);
+    sessionStorage.removeItem('cpl-player-session');
+    sessionStorage.removeItem('cpl-owner-session');
     setPlayerSession(null);
     setOwnerSession(null);
   }
@@ -737,8 +1177,22 @@ function App() {
       loadTeams(tournamentId),
       loadPlayers(tournamentId),
       loadLogs(tournamentId),
+      loadOwnerPasses(tournamentId),
       loadWebsiteContent(tournamentId)
     ]);
+  }
+
+  async function loadOwnerPasses(tournamentId = selectedTournamentId, playerId = settings.current_player_id) {
+    if (!tournamentId || !playerId) {
+      setOwnerPasses([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('owner_passes')
+      .select('*, teams(team_name)')
+      .eq('tournament_id', tournamentId)
+      .eq('player_id', playerId);
+    if (!error) setOwnerPasses(data || []);
   }
 
   async function loadSettings(tournamentId = selectedTournamentId) {
@@ -819,6 +1273,21 @@ function App() {
     [tournaments, selectedTournamentId]
   );
 
+  function navigateView(nextView, options = {}) {
+    const resolvedView = typeof nextView === 'function' ? nextView(view) : nextView;
+    if (!resolvedView || resolvedView === view) return;
+    if (!options.replace) {
+      setViewHistory((history) => [...history, view].slice(-20));
+    }
+    setView(resolvedView);
+  }
+
+  function goBackView() {
+    const previousView = viewHistory[viewHistory.length - 1] || 'home';
+    setViewHistory((history) => history.slice(0, -1));
+    setView(previousView);
+  }
+
   if (!hasSupabaseConfig) {
     return <MissingConfig />;
   }
@@ -836,18 +1305,20 @@ function App() {
 
   const logoutAdmin = async () => {
     await supabase.auth.signOut();
+    sessionStorage.removeItem('cpl-admin-role');
+    setAdminRole('admin');
     setIsAdmin(false);
-    setView('home');
+    navigateView('home', { replace: true });
   };
   const logoutPlayer = () => {
-    localStorage.removeItem('cpl-player-session');
+    sessionStorage.removeItem('cpl-player-session');
     setPlayerSession(null);
-    setView('home');
+    navigateView('home', { replace: true });
   };
   const logoutOwner = () => {
-    localStorage.removeItem('cpl-owner-session');
+    sessionStorage.removeItem('cpl-owner-session');
     setOwnerSession(null);
-    setView('home');
+    navigateView('home', { replace: true });
   };
 
   if (view === 'home') {
@@ -863,7 +1334,7 @@ function App() {
           players={players}
           selectedTournamentId={selectedTournamentId}
           setMessage={setMessage}
-          setView={setView}
+          setView={navigateView}
         />
       </>
     );
@@ -872,7 +1343,8 @@ function App() {
   return (
     <Shell
       view={view}
-      setView={setView}
+      setView={navigateView}
+      onBack={goBackView}
       adminSession={adminSession}
       playerSession={playerSession}
       ownerSession={ownerSession}
@@ -885,6 +1357,17 @@ function App() {
     >
       <PlayerCriteriaDatalist />
       {message && <Toast message={message} onClose={() => setMessage('')} />}
+
+      {view === 'login' && (
+        <LoginHub
+          selectedTournamentId={selectedTournamentId}
+          setMessage={setMessage}
+          setView={navigateView}
+          setPlayerSession={setPlayerSession}
+          setOwnerSession={setOwnerSession}
+          setAdminRole={setAdminRole}
+        />
+      )}
 
       {view === 'admin' && (
         adminSession && isAdmin ? (
@@ -904,11 +1387,21 @@ function App() {
             setWebsiteContent={setWebsiteContent}
             setMessage={setMessage}
             loadAll={loadAll}
+            setView={navigateView}
             auctionResult={auctionResult}
             setAuctionResult={setAuctionResult}
+            adminRole={adminRole}
           />
         ) : (
-          <AdminLogin setMessage={setMessage} />
+          <LoginHub
+            defaultTab="admin"
+            selectedTournamentId={selectedTournamentId}
+            setMessage={setMessage}
+            setView={navigateView}
+            setPlayerSession={setPlayerSession}
+            setOwnerSession={setOwnerSession}
+            setAdminRole={setAdminRole}
+          />
         )
       )}
 
@@ -930,15 +1423,19 @@ function App() {
             settings={settings}
             logs={logs.filter((log) => log.player_id === playerProfile.id)}
             logout={() => {
-              localStorage.removeItem('cpl-player-session');
+              sessionStorage.removeItem('cpl-player-session');
               setPlayerSession(null);
             }}
           />
         ) : (
-          <PlayerLogin
+          <LoginHub
+            defaultTab="player"
             setPlayerSession={setPlayerSession}
             selectedTournamentId={selectedTournamentId}
             setMessage={setMessage}
+            setView={navigateView}
+            setOwnerSession={setOwnerSession}
+            setAdminRole={setAdminRole}
           />
         )
       )}
@@ -948,10 +1445,12 @@ function App() {
           <TeamOwnerDashboard
             ownerTeam={ownerTeam}
             settings={settings}
+            teams={teams}
             players={players}
             logs={logs}
             currentPlayer={currentPlayer}
             highestTeam={highestTeam}
+            ownerPasses={ownerPasses}
             selectedTournamentId={selectedTournamentId}
             ownerSession={ownerSession}
             setOwnerSession={setOwnerSession}
@@ -960,10 +1459,14 @@ function App() {
             logout={logoutOwner}
           />
         ) : (
-          <TeamOwnerLogin
+          <LoginHub
+            defaultTab="owner"
             selectedTournamentId={selectedTournamentId}
             setOwnerSession={setOwnerSession}
             setMessage={setMessage}
+            setView={navigateView}
+            setPlayerSession={setPlayerSession}
+            setAdminRole={setAdminRole}
           />
         )
       )}
@@ -999,6 +1502,7 @@ function Shell({
   children,
   view,
   setView,
+  onBack,
   adminSession,
   playerSession,
   ownerSession,
@@ -1009,18 +1513,28 @@ function Shell({
   logoutPlayer,
   logoutOwner
 }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const nav = [
     { key: 'home', label: 'Home', icon: Trophy },
-    { key: 'admin', label: 'Admin', icon: Shield },
-    { key: 'register', label: 'New Players Registration', icon: UserPlus },
-    { key: 'player', label: 'Player', icon: User },
-    { key: 'owner', label: 'Team Owner', icon: WalletCards },
+    { key: 'login', label: 'Login', icon: KeyRound },
+    adminSession && { key: 'admin', label: 'Admin', icon: Shield },
+    playerSession && { key: 'player', label: 'Player', icon: User },
+    ownerSession && { key: 'owner', label: 'Team Owner', icon: WalletCards },
     { key: 'scoring', label: 'Match Scoring', icon: Activity },
     { key: 'projector', label: 'Projector', icon: MonitorUp }
-  ];
+  ].filter(Boolean);
 
   return (
-    <div className="app-shell">
+    <div className={classNames('app-shell', mobileMenuOpen && 'shell-mobile-menu-open')}>
+      <div className="shell-mobile-topbar">
+        <div className="brand compact">
+          <BrandMonogram compact />
+          <strong>CPL Auction</strong>
+        </div>
+        <button className="mobile-menu-toggle" onClick={() => setMobileMenuOpen((open) => !open)} aria-label="Open menu">
+          {mobileMenuOpen ? <X size={26} /> : <Menu size={28} />}
+        </button>
+      </div>
       <aside className="sidebar">
         <div className="brand">
           <BrandMonogram />
@@ -1037,7 +1551,10 @@ function Shell({
               <button
                 key={item.key}
                 className={classNames('nav-button', view === item.key && 'active')}
-                onClick={() => setView(item.key)}
+                onClick={() => {
+                  setView(item.key);
+                  setMobileMenuOpen(false);
+                }}
               >
                 <Icon size={18} />
                 <span>{item.label}</span>
@@ -1084,12 +1601,31 @@ function Shell({
         )}
       </aside>
 
-      <main className="content">{children}</main>
+      <main className="content">
+        {onBack && view !== 'home' && (
+          <button type="button" className="back-button" onClick={onBack} aria-label="Go back">
+            <ArrowLeft size={18} />
+            Back
+          </button>
+        )}
+        {children}
+      </main>
     </div>
   );
 }
 
-function PublicWebsite({ tournament, websiteContent, settings, teams, players, selectedTournamentId, setMessage, setView }) {
+function PublicWebsite({
+  tournament,
+  websiteContent,
+  settings,
+  teams,
+  players,
+  selectedTournamentId,
+  setMessage,
+  setView,
+  demoMode = false,
+  disableRegistration = false
+}) {
   const content = mergeWebsiteContent(websiteContent);
   const [popupClosed, setPopupClosed] = useState(false);
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
@@ -1097,6 +1633,9 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
   const [testimonialSlideIndex, setTestimonialSlideIndex] = useState(0);
   const [visitorCountValue, setVisitorCountValue] = useState(100);
   const [selectedPublicTeamId, setSelectedPublicTeamId] = useState(null);
+  const [activeHash, setActiveHash] = useState(() => window.location.hash.replace('#', ''));
+  const [registrationFocused, setRegistrationFocused] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const featuredPlayers = players.filter((player) => playerMeta(player, 'photo_url') || player.photo_url).slice(0, 6);
   const soldPlayers = players.filter((player) => player.sold_status === 'Sold').length;
   const displayTeamCount = selectedTournamentId ? teams.length : 0;
@@ -1144,18 +1683,66 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
       };
     })
     : [];
+  const registrationClosed = isAuctionRegistrationClosed(tournament);
+  const registrationLocked = disableRegistration || registrationClosed;
+  const registrationRequested = activeHash === 'registration' || registrationFocused;
+  const showRegistrationSection = !registrationLocked && registrationRequested;
+  const showRegistrationClosedNotice = registrationLocked && activeHash === 'registration';
+  const registrationMobileMode = showRegistrationSection;
 
   useEffect(() => {
-    const key = `cpl-visitor-count-${selectedTournamentId || 'default'}`;
-    try {
-      const savedCount = Number(localStorage.getItem(key));
-      const nextCount = Number.isFinite(savedCount) && savedCount >= 100 ? savedCount + 1 : 101;
-      localStorage.setItem(key, String(nextCount));
-      setVisitorCountValue(nextCount);
-    } catch {
-      setVisitorCountValue(101);
+    let cancelled = false;
+
+    async function syncVisitorCount() {
+      if (!hasSupabaseConfig) return;
+      try {
+        const alreadyCounted = sessionStorage.getItem(sharedVisitorSessionKey) === 'yes';
+        const nextCount = alreadyCounted
+          ? await readSharedVisitorCount()
+          : await incrementSharedVisitorCount();
+        if (!alreadyCounted) sessionStorage.setItem(sharedVisitorSessionKey, 'yes');
+        if (!cancelled) setVisitorCountValue(nextCount);
+      } catch {
+        if (!cancelled) setVisitorCountValue(100);
+      }
     }
-  }, [selectedTournamentId]);
+
+    syncVisitorCount();
+    if (!hasSupabaseConfig) return () => { cancelled = true; };
+
+    const visitorChannel = supabase
+      .channel(`public-visitor-count-${Math.random().toString(36).slice(2)}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_config', filter: `key=eq.${sharedVisitorCounterKey}` },
+        (payload) => {
+          const nextCount = visitorCountFromConfig(payload.new?.value, visitorCountValue);
+          if (!cancelled) setVisitorCountValue(nextCount);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(visitorChannel);
+    };
+  }, []);
+
+  useEffect(() => {
+    function updateHash() {
+      const nextHash = window.location.hash.replace('#', '');
+      setActiveHash(nextHash);
+      if (nextHash === 'registration' && window.matchMedia('(max-width: 680px)').matches) {
+        window.setTimeout(() => {
+          document.getElementById('registration')?.scrollIntoView({ block: 'start' });
+        }, 0);
+      }
+    }
+
+    updateHash();
+    window.addEventListener('hashchange', updateHash);
+    return () => window.removeEventListener('hashchange', updateHash);
+  }, []);
 
   useEffect(() => {
     if (heroSlideIndex >= heroSlides.length) setHeroSlideIndex(0);
@@ -1199,8 +1786,60 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
     return () => clearInterval(timer);
   }, [testimonialItems.length]);
 
+  useEffect(() => {
+    function blockPublicShortcuts(event) {
+      const key = String(event.key || '').toLowerCase();
+      const protectedShortcut = (event.ctrlKey || event.metaKey) && ['c', 's', 'u', 'p'].includes(key);
+      if (protectedShortcut || key === 'f12') {
+        event.preventDefault();
+        setMessage('Protected preview: copy, save, print, and source shortcuts disabled.');
+      }
+    }
+
+    document.addEventListener('keydown', blockPublicShortcuts);
+    return () => document.removeEventListener('keydown', blockPublicShortcuts);
+  }, [setMessage]);
+
+  function closeMobileMenu() {
+    setMobileMenuOpen(false);
+  }
+
+  function closeRegistrationAfterSave() {
+    setRegistrationFocused(false);
+    setActiveHash('');
+    if (window.location.hash === '#registration') {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    }
+    window.setTimeout(() => {
+      document.getElementById('home')?.scrollIntoView({ block: 'start' });
+    }, 0);
+  }
+
+  function blockClosedRegistration(event) {
+    event.preventDefault();
+    setPopupClosed(true);
+    setMessage(disableRegistration
+      ? 'Demo version me registration/save disabled hai.'
+      : `Auction registration closed${tournament?.auction_end_date ? ` on ${formatDate(tournament.auction_end_date)}` : ''}.`);
+  }
+
   return (
-    <div className="public-site">
+    <div
+      className={classNames(
+        'public-site',
+        'protected-content',
+        demoMode && 'demo-mode',
+        registrationMobileMode && 'registration-mobile-mode',
+        mobileMenuOpen && 'mobile-menu-open'
+      )}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMessage('Protected preview: right click disabled.');
+      }}
+      onDragStart={(event) => event.preventDefault()}
+    >
+      {demoMode && <div className="demo-banner">DEMO VERSION - Read only preview, data save disabled</div>}
+      <div className="public-protection-watermark" aria-hidden="true">CPL Auction Software</div>
       {content.popup.enabled && !popupClosed && (
         <div className="site-popup" role="dialog" aria-modal="true">
           <div className="site-popup-card">
@@ -1208,9 +1847,15 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
             <p className="eyebrow">Announcement</p>
             <h2>{content.popup.title}</h2>
             <p>{content.popup.message}</p>
-            <a className="primary-button inline" href="#registration" onClick={() => setPopupClosed(true)}>
-              <UserPlus size={18} /> {content.popup.button_label || 'Register Now'}
-            </a>
+            {registrationLocked ? (
+              <button className="primary-button inline" type="button" onClick={blockClosedRegistration}>
+                <UserPlus size={18} /> {disableRegistration ? 'Demo Locked' : 'Registration Closed'}
+              </button>
+            ) : (
+              <a className="primary-button inline" href="#registration" onClick={() => setPopupClosed(true)}>
+                <UserPlus size={18} /> {content.popup.button_label || 'Register Now'}
+              </a>
+            )}
           </div>
         </div>
       )}
@@ -1219,24 +1864,29 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
           <BrandMonogram compact />
           <strong>Players Auction System</strong>
         </a>
-        <nav>
-          <a href="#home">Home</a>
-          <a href="#registration">Registration</a>
-          <a href="#about">About</a>
-          <a href="#photos">Photos</a>
-          <a href="#contact">Contact</a>
-          <button type="button" onClick={() => setView('scoring')}>Match Scoring</button>
-        </nav>
-        <div className="public-actions">
-          <button className="ghost-button inline small" onClick={() => setView('player')}>
-            <User size={15} /> Player Login
-          </button>
-          <button className="ghost-button inline small" onClick={() => setView('owner')}>
-            <WalletCards size={15} /> Owner Login
-          </button>
-          <button className="primary-button small" onClick={() => setView('admin')}>
-            <Shield size={15} /> Admin Login
-          </button>
+        <button
+          type="button"
+          className="mobile-menu-toggle"
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={mobileMenuOpen}
+        >
+          {mobileMenuOpen ? <X size={26} /> : <Menu size={28} />}
+        </button>
+        <div className="public-menu-panel">
+          <nav>
+            <a href="#home" onClick={closeMobileMenu}>Home</a>
+            <a href="#about" onClick={closeMobileMenu}>About</a>
+            <a href="#match-schedule" onClick={closeMobileMenu}>Match Schedule</a>
+            <a href="#photos" onClick={closeMobileMenu}>Photos</a>
+            <a href="#contact" onClick={closeMobileMenu}>Contact</a>
+            <button type="button" onClick={() => { closeMobileMenu(); setView('scoring'); }}>Match Scoring</button>
+          </nav>
+          <div className="public-actions">
+            <button className="primary-button small" onClick={() => { closeMobileMenu(); setView('login'); }}>
+              <KeyRound size={15} /> Login
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1263,7 +1913,6 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
             </div>
             <div className="hero-cta-row">
               <a className="hero-button read-more" href="#about">Read More</a>
-              <a className="hero-button register-now" href="#registration">Register Now</a>
             </div>
             <div className="hero-stats">
               <Metric label="Teams" value={displayTeamCount} />
@@ -1318,21 +1967,48 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
           </div>
         </section>
 
-        <section id="registration" className="home-section homepage-register">
-          <div className="section-heading">
-            <p className="eyebrow">New Players Registration</p>
-            <h2>Player Registration Form</h2>
-          </div>
-          <PlayerRegistration
-            players={players}
-            settings={settings}
-            tournament={tournament}
-            selectedTournamentId={selectedTournamentId}
-            setMessage={setMessage}
-            showHeader={false}
-            showTable={false}
-          />
-        </section>
+        {showRegistrationSection && (
+          <section
+            id="registration"
+            className="home-section homepage-register"
+            onFocusCapture={() => setRegistrationFocused(true)}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) setRegistrationFocused(false);
+            }}
+          >
+            <div className="section-heading">
+              <p className="eyebrow">New Players Registration</p>
+              <h2>Player Registration Form</h2>
+            </div>
+            <PlayerRegistration
+              players={players}
+              settings={settings}
+              tournament={tournament}
+              selectedTournamentId={selectedTournamentId}
+              setMessage={setMessage}
+              paymentQrUrl={content.payment_qr_url}
+              showHeader={false}
+              showTable={false}
+              onSaved={closeRegistrationAfterSave}
+            />
+          </section>
+        )}
+
+        {showRegistrationClosedNotice && (
+          <section id="registration" className="home-section homepage-register">
+            <div className="section-heading">
+              <p className="eyebrow">{disableRegistration ? 'Demo Locked' : 'Registration Closed'}</p>
+              <h2>{disableRegistration ? 'Demo version me registration disabled hai' : 'Auction registration closed'}</h2>
+              <p className="empty-text">
+                {disableRegistration
+                  ? 'Ye demo client ko preview dikhane ke liye hai. Isme player save ya upload nahi hoga.'
+                  : tournament?.auction_end_date
+                  ? `Registration ${formatDate(tournament.auction_end_date)} ke baad closed hai.`
+                  : 'Registration abhi closed hai.'}
+              </p>
+            </div>
+          </section>
+        )}
 
         <section id="about" className="home-section about-grid">
           <div>
@@ -1343,10 +2019,26 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
             </p>
           </div>
           <div className="about-cards">
-            <button type="button" onClick={() => setView('owner')}><Gavel size={24} /><strong>Live Bidding</strong><span>Realtime auction updates</span></button>
+            <button type="button" onClick={() => setView('login')}><Gavel size={24} /><strong>Live Bidding</strong><span>Realtime auction updates</span></button>
             <article><WalletCards size={24} /><strong>Purse Control</strong><span>Budget validation built in</span></article>
             <button type="button" onClick={() => setView('projector')}><MonitorUp size={24} /><strong>Projector View</strong><span>Clean public display</span></button>
           </div>
+        </section>
+
+        <section id="match-schedule" className="home-section public-pamphlet-section">
+          <div className="section-heading">
+            <p className="eyebrow">Match Schedule</p>
+            <h2>Tournament Pamphlet</h2>
+          </div>
+          <TournamentPamphlet
+            tournament={tournament}
+            settings={settings}
+            teams={teams}
+            players={players}
+            editable={false}
+            showPrintButton={false}
+            savedDraft={content.pamphlet_draft}
+          />
         </section>
 
         <section id="photos" className="home-section">
@@ -1469,10 +2161,9 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
               <h3>Quick Link</h3>
               <nav className="footer-links">
                 <a href="#about"><span>›</span> About Us</a>
-                <a href="#registration"><span>›</span> New Player Registration</a>
                 <a href="#photos"><span>›</span> Gallery</a>
                 <a href="#contact"><span>›</span> Contact Us</a>
-                <button type="button" onClick={() => setView('admin')}><span>›</span> Login</button>
+                <button type="button" onClick={() => setView('login')}><span>›</span> Login</button>
               </nav>
             </section>
 
@@ -1487,7 +2178,7 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
               <div className="footer-socials" aria-label="Social links">
                 <a href="#home" aria-label="CPL social">C</a>
                 <a href="#photos" aria-label="Gallery social">G</a>
-                <a href="#registration" aria-label="Registration social">R</a>
+                {content.popup.enabled && !registrationLocked && <a href="#registration" aria-label="Registration social">R</a>}
                 <a href="#contact" aria-label="Contact social">@</a>
               </div>
             </section>
@@ -1495,7 +2186,7 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
             <section>
               <h3>Auction Application</h3>
               <p className="footer-app-copy">Live auction, player registration, team purse, and projector display are available in this CPL system.</p>
-              <a className="footer-app-badge" href="#registration">Open CPL Auction</a>
+              {content.popup.enabled && !registrationLocked && <a className="footer-app-badge" href="#registration">Open CPL Auction</a>}
               <div className="visitor-count">
                 <strong>Visitor Count .</strong>
                 <span>{visitorCount.map((digit, index) => <b key={`${digit}-${index}`}>{digit}</b>)}</span>
@@ -1503,8 +2194,14 @@ function PublicWebsite({ tournament, websiteContent, settings, teams, players, s
             </section>
           </div>
           <div className="footer-bottom">
-            <span>© 2026 <strong>{tournament?.name || 'CPL Auction'}</strong> All Right Reserved.</span>
-            <span>Developed By <strong>Create Computer</strong></span>
+            <span>© 2026 <strong>Create Computer, Rajnandgaon, 7000492856</strong> All Right Reserved.</span>
+            <div className="footer-developer">
+              <span>Developed By</span>
+              <div className="footer-developer-brand">
+                <img src="/create-computer-logo.jpeg" alt="Create Computer logo" />
+                <strong>Create Computer</strong>
+              </div>
+            </div>
           </div>
         </footer>
       </main>
@@ -1526,19 +2223,99 @@ VITE_SUPABASE_ANON_KEY=your-supabase-anon-public-key`}</pre>
   );
 }
 
-function AdminLogin({ setMessage }) {
+function LoginHub({
+  defaultTab = 'player',
+  selectedTournamentId,
+  setMessage,
+  setView,
+  setPlayerSession,
+  setOwnerSession,
+  setAdminRole
+}) {
+  const [tab, setTab] = useState(defaultTab);
+  const tabs = [
+    { key: 'player', label: 'Player', icon: User },
+    { key: 'owner', label: 'Owner', icon: WalletCards },
+    { key: 'admin', label: 'Admin', icon: Shield }
+  ];
+
+  return (
+    <section className="login-hub">
+      <div className="panel form-panel login-card">
+        <div className="section-title">
+          <KeyRound size={22} />
+          <h1>Login</h1>
+        </div>
+        <div className="segmented full-segment login-tabs">
+          {tabs.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                type="button"
+                key={item.key}
+                className={classNames(tab === item.key && 'active')}
+                onClick={() => setTab(item.key)}
+              >
+                <Icon size={16} /> {item.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {tab === 'player' && (
+          <PlayerLogin
+            compact
+            selectedTournamentId={selectedTournamentId}
+            setMessage={setMessage}
+            setPlayerSession={setPlayerSession}
+            onSuccess={() => setView('player')}
+          />
+        )}
+        {tab === 'owner' && (
+          <TeamOwnerLogin
+            compact
+            selectedTournamentId={selectedTournamentId}
+            setMessage={setMessage}
+            setOwnerSession={setOwnerSession}
+            onSuccess={() => setView('owner')}
+          />
+        )}
+        {tab === 'admin' && (
+          <AdminLogin
+            compact
+            setMessage={setMessage}
+            onSuccess={(role) => {
+              sessionStorage.setItem('cpl-admin-role', role);
+              setAdminRole?.(role);
+              setView('admin');
+            }}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AdminLogin({ setMessage, onSuccess, compact = false }) {
   const [adminId, setAdminId] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function submit(event) {
     event.preventDefault();
-    if (adminId.trim().toLowerCase() !== fixedAdminId || password !== fixedAdminPassword) {
+    const loginId = adminId.trim().toLowerCase();
+    setBusy(true);
+    const roleConfig = loginId === fixedAdminId
+      ? { role: 'admin', savedPassword: await readAdminGatePassword() }
+      : loginId === fixedSubAdminId
+        ? { role: 'subadmin', savedPassword: await readSubAdminGatePassword() }
+        : null;
+    if (!roleConfig || password !== roleConfig.savedPassword) {
+      setBusy(false);
       setMessage('Invalid admin ID or password.');
       return;
     }
 
-    setBusy(true);
     const { data, error } = await supabase.auth.signInWithPassword({
       email: fixedAdminEmail,
       password: fixedAdminPassword
@@ -1558,35 +2335,229 @@ function AdminLogin({ setMessage }) {
     if (!adminUser || adminError) {
       await supabase.auth.signOut();
       setMessage(`Add ${fixedAdminEmail} to the admin_users table before logging in.`);
+      return;
     }
+    onSuccess?.(roleConfig.role);
   }
+
+  const form = (
+    <form className="panel form-panel login-form-panel" onSubmit={submit}>
+      <label>
+        Admin / Sub Admin ID
+        <input type="text" value={adminId} onChange={(e) => setAdminId(e.target.value)} required />
+      </label>
+      <label>
+        Password
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+      </label>
+      <button className="primary-button" disabled={busy}>
+        <Shield size={18} />
+        {busy ? 'Signing in...' : 'Sign in'}
+      </button>
+    </form>
+  );
+
+  if (compact) return form;
 
   return (
     <section className="auth-grid">
       <div className="auth-copy">
         <Shield size={34} />
         <h1>Admin auction console</h1>
-        <p>Sign in with the fixed admin ID to configure teams, import players, and control live bidding.</p>
+        <p>Sign in with admin or subadmin ID to configure teams, import players, and control live bidding.</p>
       </div>
-      <form className="panel form-panel" onSubmit={submit}>
-        <label>
-          Admin ID
-          <input type="text" value={adminId} onChange={(e) => setAdminId(e.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        <button className="primary-button" disabled={busy}>
-          <Shield size={18} />
-          {busy ? 'Signing in...' : 'Sign in'}
-        </button>
-      </form>
+      {form}
     </section>
   );
 }
 
-function PlayerLogin({ setPlayerSession, selectedTournamentId, setMessage }) {
+function AdminPasswordAdmin({ setMessage }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [nextPassword, setNextPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [adminPasswordForSubAdmin, setAdminPasswordForSubAdmin] = useState('');
+  const [nextSubAdminPassword, setNextSubAdminPassword] = useState('');
+  const [confirmSubAdminPassword, setConfirmSubAdminPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [subAdminBusy, setSubAdminBusy] = useState(false);
+
+  async function submitAdminPassword(event) {
+    event.preventDefault();
+    const current = currentPassword.trim();
+    const next = nextPassword.trim();
+    const confirm = confirmPassword.trim();
+
+    if (next.length < 5) {
+      setMessage('New admin password kam se kam 5 characters ka rakho.');
+      return;
+    }
+    if (next !== confirm) {
+      setMessage('New password aur confirm password match nahi ho raha.');
+      return;
+    }
+
+    setBusy(true);
+    const savedPassword = await readAdminGatePassword();
+    if (current !== savedPassword) {
+      setBusy(false);
+      setMessage('Current admin password galat hai.');
+      return;
+    }
+
+    const { error } = await saveAdminGatePassword(next);
+    setBusy(false);
+    if (error) {
+      setMessage(`Admin password save nahi hua. Supabase SQL me database/add-global-config-and-owner-pass.sql run karo. Detail: ${error.message}`);
+      return;
+    }
+
+    setCurrentPassword('');
+    setNextPassword('');
+    setConfirmPassword('');
+    setMessage('Admin password changed. Next login me naya password use hoga.');
+  }
+
+  async function submitSubAdminPassword(event) {
+    event.preventDefault();
+    const adminPassword = adminPasswordForSubAdmin.trim();
+    const next = nextSubAdminPassword.trim();
+    const confirm = confirmSubAdminPassword.trim();
+
+    if (next.length < 5) {
+      setMessage('Sub Admin password kam se kam 5 characters ka rakho.');
+      return;
+    }
+    if (next !== confirm) {
+      setMessage('Sub Admin password aur confirm password match nahi ho raha.');
+      return;
+    }
+
+    setSubAdminBusy(true);
+    const savedAdminPassword = await readAdminGatePassword();
+    if (adminPassword !== savedAdminPassword) {
+      setSubAdminBusy(false);
+      setMessage('Admin password galat hai. Sub Admin password change nahi hua.');
+      return;
+    }
+
+    const { error } = await saveSubAdminGatePassword(next);
+    setSubAdminBusy(false);
+    if (error) {
+      setMessage(`Sub Admin password save nahi hua. Supabase SQL setup check karo. Detail: ${error.message}`);
+      return;
+    }
+
+    setAdminPasswordForSubAdmin('');
+    setNextSubAdminPassword('');
+    setConfirmSubAdminPassword('');
+    setMessage('Sub Admin password changed. Sub Admin next login me naya password use karega.');
+  }
+
+  return (
+    <div className="stack">
+      <section className="panel form-panel admin-security-panel">
+        <div className="section-title">
+          <Shield size={22} />
+          <h2>Change Admin Password</h2>
+        </div>
+        <p className="empty-text">
+          Admin ID same rahega: <strong>{fixedAdminId}</strong>. Password change karne ke baad next login me naya password lagega.
+        </p>
+        <form className="nested-form" onSubmit={submitAdminPassword}>
+          <label>
+            Current Password
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <label>
+            New Password
+            <input
+              type="password"
+              value={nextPassword}
+              onChange={(event) => setNextPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength="5"
+              required
+            />
+          </label>
+          <label>
+            Confirm New Password
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength="5"
+              required
+            />
+          </label>
+          <div className="button-row">
+            <button className="primary-button" type="submit" disabled={busy}>
+              <Save size={18} /> {busy ? 'Saving...' : 'Save Password'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="panel form-panel admin-security-panel">
+        <div className="section-title">
+          <Users size={22} />
+          <h2>Sub Admin Password</h2>
+        </div>
+        <p className="empty-text">
+          Sub Admin ID: <strong>{fixedSubAdminId}</strong>. Default password: <strong>{fixedSubAdminPassword}</strong>.
+          Sub Admin ko admin jaise controls milenge, lekin Password tab nahi dikhega.
+        </p>
+        <form className="nested-form" onSubmit={submitSubAdminPassword}>
+          <label>
+            Admin Password
+            <input
+              type="password"
+              value={adminPasswordForSubAdmin}
+              onChange={(event) => setAdminPasswordForSubAdmin(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <label>
+            New Sub Admin Password
+            <input
+              type="password"
+              value={nextSubAdminPassword}
+              onChange={(event) => setNextSubAdminPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength="5"
+              required
+            />
+          </label>
+          <label>
+            Confirm Sub Admin Password
+            <input
+              type="password"
+              value={confirmSubAdminPassword}
+              onChange={(event) => setConfirmSubAdminPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength="5"
+              required
+            />
+          </label>
+          <div className="button-row">
+            <button className="primary-button" type="submit" disabled={subAdminBusy}>
+              <Save size={18} /> {subAdminBusy ? 'Saving...' : 'Save Sub Admin Password'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function PlayerLogin({ setPlayerSession, selectedTournamentId, setMessage, onSuccess, compact = false }) {
   const [mobile, setMobile] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1613,9 +2584,41 @@ function PlayerLogin({ setPlayerSession, selectedTournamentId, setMessage }) {
       return;
     }
 
-    localStorage.setItem('cpl-player-session', JSON.stringify(player));
+    sessionStorage.setItem('cpl-player-session', JSON.stringify(player));
     setPlayerSession(player);
+    onSuccess?.();
   }
+
+  const form = (
+    <form className="panel form-panel login-form-panel" onSubmit={submit}>
+      <label>
+        Mobile Number
+        <input
+          inputMode="numeric"
+          maxLength="10"
+          value={mobile}
+          onChange={(e) => setMobile(digitsOnly(e.target.value))}
+          required
+        />
+      </label>
+      <label>
+        Password
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="First word of name"
+          required
+        />
+      </label>
+      <button className="primary-button" disabled={busy || mobile.length !== 10}>
+        <User size={18} />
+        {busy ? 'Checking...' : 'Enter dashboard'}
+      </button>
+    </form>
+  );
+
+  if (compact) return form;
 
   return (
     <section className="auth-grid">
@@ -1624,37 +2627,12 @@ function PlayerLogin({ setPlayerSession, selectedTournamentId, setMessage }) {
         <h1>Player dashboard</h1>
         <p>Players sign in with mobile number and the first word of their registered name. Status updates arrive live during the auction.</p>
       </div>
-      <form className="panel form-panel" onSubmit={submit}>
-        <label>
-          Mobile Number
-          <input
-            inputMode="numeric"
-            maxLength="10"
-            value={mobile}
-            onChange={(e) => setMobile(digitsOnly(e.target.value))}
-            required
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="First word of name"
-            required
-          />
-        </label>
-        <button className="primary-button" disabled={busy || mobile.length !== 10}>
-          <User size={18} />
-          {busy ? 'Checking...' : 'Enter dashboard'}
-        </button>
-      </form>
+      {form}
     </section>
   );
 }
 
-function TeamOwnerLogin({ selectedTournamentId, setOwnerSession, setMessage }) {
+function TeamOwnerLogin({ selectedTournamentId, setOwnerSession, setMessage, onSuccess, compact = false }) {
   const [mobile, setMobile] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1686,9 +2664,41 @@ function TeamOwnerLogin({ selectedTournamentId, setOwnerSession, setMessage }) {
     }
 
     const session = { ...team, owner_pin: pin.trim() };
-    localStorage.setItem('cpl-owner-session', JSON.stringify(session));
+    sessionStorage.setItem('cpl-owner-session', JSON.stringify(session));
     setOwnerSession(session);
+    onSuccess?.();
   }
+
+  const form = (
+    <form className="panel form-panel login-form-panel" onSubmit={submit}>
+      <label>
+        Owner Mobile Number
+        <input
+          inputMode="numeric"
+          maxLength="10"
+          value={mobile}
+          onChange={(e) => setMobile(digitsOnly(e.target.value))}
+          required
+        />
+      </label>
+      <label>
+        Owner PIN
+        <input
+          inputMode="numeric"
+          value={pin}
+          onChange={(e) => setPin(numericText(e.target.value).slice(0, 8))}
+          placeholder="Mobile last 4 digit, if default"
+          required
+        />
+      </label>
+      <button className="primary-button" disabled={busy || mobile.length !== 10}>
+        <KeyRound size={18} />
+        {busy ? 'Checking...' : 'Enter owner room'}
+      </button>
+    </form>
+  );
+
+  if (compact) return form;
 
   return (
     <section className="auth-grid">
@@ -1697,32 +2707,7 @@ function TeamOwnerLogin({ selectedTournamentId, setOwnerSession, setMessage }) {
         <h1>Team owner bidding</h1>
         <p>Team owner apne mobile, laptop ya desktop se live player par bid place kar sakta hai. Budget aur roster validation automatic rahega.</p>
       </div>
-      <form className="panel form-panel" onSubmit={submit}>
-        <label>
-          Owner Mobile Number
-          <input
-            inputMode="numeric"
-            maxLength="10"
-            value={mobile}
-            onChange={(e) => setMobile(digitsOnly(e.target.value))}
-            required
-          />
-        </label>
-        <label>
-          Owner PIN
-          <input
-            inputMode="numeric"
-            value={pin}
-            onChange={(e) => setPin(numericText(e.target.value).slice(0, 8))}
-            placeholder="Mobile last 4 digit, if default"
-            required
-          />
-        </label>
-        <button className="primary-button" disabled={busy || mobile.length !== 10}>
-          <KeyRound size={18} />
-          {busy ? 'Checking...' : 'Enter owner room'}
-        </button>
-      </form>
+      {form}
     </section>
   );
 }
@@ -1733,8 +2718,12 @@ function PlayerRegistration({
   tournament,
   selectedTournamentId,
   setMessage,
+  paymentQrUrl = '',
   showHeader = true,
-  showTable = true
+  showTable = true,
+  showPhotoSection = true,
+  requirePhoto = true,
+  onSaved
 }) {
   const [form, setForm] = useState(blankRegistration);
   const [photoFile, setPhotoFile] = useState(null);
@@ -1743,12 +2732,19 @@ function PlayerRegistration({
   const [photoPreview, setPhotoPreview] = useState('');
   const [paymentPreview, setPaymentPreview] = useState('');
   const [aadhaarPreview, setAadhaarPreview] = useState('');
+  const [barcodePreview, setBarcodePreview] = useState(paymentQrUrl || '');
+  const [photoCrop, setPhotoCrop] = useState(defaultPassportCrop);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setBarcodePreview(paymentQrUrl || '');
+  }, [paymentQrUrl]);
 
   function updatePhoto(file) {
     setPhotoFile(file || null);
     if (photoPreview) URL.revokeObjectURL(photoPreview);
     setPhotoPreview(file ? URL.createObjectURL(file) : '');
+    setPhotoCrop(defaultPassportCrop);
   }
 
   function updatePaymentFile(file) {
@@ -1766,16 +2762,17 @@ function PlayerRegistration({
   async function submit(event) {
     event.preventDefault();
     if (!selectedTournamentId) return setMessage('Select a tournament before registration.');
-    if (!photoFile) return setMessage('Player photo is required.');
+    if (requirePhoto && !photoFile) return setMessage('Player photo is required.');
 
     const mobile = digitsOnly(form.mobile_number);
     if (mobile.length !== 10) return setMessage('Mobile number must be 10 digits.');
 
     setBusy(true);
+    setMessage('Player save ho raha hai, please wait...');
     try {
-      const photoData = await imageFileToCompressedDataUrl(photoFile, 520, 680, 0.78);
-      const paymentData = await imageFileToCompressedDataUrl(paymentFile, 900, 1100, 0.68);
-      const aadhaarData = await imageFileToCompressedDataUrl(aadhaarFile, 900, 1100, 0.68);
+      const photoData = photoFile ? await imageFileToPassportDataUrl(photoFile, photoCrop) : '';
+      const paymentData = await imageFileToCompressedDataUrl(paymentFile, 560, 760, 0.48);
+      const aadhaarData = await imageFileToCompressedDataUrl(aadhaarFile, 560, 760, 0.48);
 
       const { error } = await supabase.from('players').insert({
         tournament_id: selectedTournamentId,
@@ -1801,7 +2798,9 @@ function PlayerRegistration({
       updatePhoto(null);
       updatePaymentFile(null);
       updateAadhaarFile(null);
+      setBarcodePreview(paymentQrUrl || '');
       event.target.reset();
+      onSaved?.();
     } catch (error) {
       setMessage(formatSaveError(error));
     } finally {
@@ -1820,25 +2819,21 @@ function PlayerRegistration({
         </header>
       )}
 
-      <form className="panel registration-form" onSubmit={submit}>
-        <section className="registration-photo-panel">
-          <div className="section-title">
-            <Camera size={20} />
-            <h2>Player Photo</h2>
-          </div>
-          <div className="photo-preview">
-            {photoPreview ? (
-              <img src={photoPreview} alt="Selected player preview" />
-            ) : (
-              <Camera size={36} />
-            )}
-          </div>
-          <label className="file-button wide">
-            <Camera size={18} />
-            Select From Camera/Gallery
-            <input type="file" accept="image/*" onChange={(e) => updatePhoto(e.target.files?.[0])} required />
-          </label>
-        </section>
+      <form className={classNames('panel registration-form', !showPhotoSection && 'without-photo-section')} onSubmit={submit}>
+        {showPhotoSection && (
+          <section className="registration-photo-panel">
+            <div className="section-title">
+              <Camera size={20} />
+              <h2>Player Photo</h2>
+            </div>
+            <PhotoCropControl preview={photoPreview} crop={photoCrop} onCropChange={setPhotoCrop} emptyIcon={<Camera size={36} />} />
+            <label className="file-button wide">
+              <Camera size={18} />
+              Select From Camera/Gallery
+              <input type="file" accept="image/*" onChange={(e) => updatePhoto(e.target.files?.[0])} required={requirePhoto} disabled={busy} />
+            </label>
+          </section>
+        )}
 
         <section className="form-panel nested-form">
           <div className="section-title">
@@ -1880,6 +2875,11 @@ function PlayerRegistration({
             <FileImage size={20} />
             <h2>Payment Details</h2>
           </div>
+          {barcodePreview && (
+            <div className="payment-qr-box">
+              <img src={barcodePreview} alt="Payment barcode preview" />
+            </div>
+          )}
           <label>
             Paid Amount
             <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} required />
@@ -1887,18 +2887,18 @@ function PlayerRegistration({
           <label className="file-button wide">
             <Upload size={18} />
             Payment Screenshot (Optional)
-            <input type="file" accept="image/*" onChange={(e) => updatePaymentFile(e.target.files?.[0] || null)} />
+            <input type="file" accept="image/*" onChange={(e) => updatePaymentFile(e.target.files?.[0] || null)} disabled={busy} />
           </label>
           <FilePreview title="Payment Screenshot" file={paymentFile} preview={paymentPreview} optional />
           <label className="file-button wide">
             <Upload size={18} />
             Aadhaar Card (Optional)
-            <input type="file" accept="image/*" onChange={(e) => updateAadhaarFile(e.target.files?.[0] || null)} />
+            <input type="file" accept="image/*" onChange={(e) => updateAadhaarFile(e.target.files?.[0] || null)} disabled={busy} />
           </label>
           <FilePreview title="Aadhaar Card" file={aadhaarFile} preview={aadhaarPreview} optional />
           <button className="primary-button" disabled={busy}>
             <CheckCircle2 size={18} />
-            {busy ? 'Saving...' : 'Save Player'}
+            {busy ? 'Saving, please wait...' : 'Save Player'}
           </button>
         </section>
       </form>
@@ -1928,6 +2928,53 @@ function FilePreview({ title, file, preview, existing, optional = false }) {
   );
 }
 
+function PhotoCropControl({ preview, crop, onCropChange, emptyIcon }) {
+  if (!preview) {
+    return (
+      <div className="photo-preview crop-frame">
+        {emptyIcon || <Camera size={36} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="photo-cropper">
+      <div className="easy-crop-frame">
+        <Cropper
+          image={preview}
+          crop={{ x: crop.x, y: crop.y }}
+          zoom={crop.zoom}
+          aspect={passportAspectRatio}
+          cropShape="rect"
+          showGrid
+          objectFit="contain"
+          onCropChange={(nextCrop) => onCropChange((current) => ({ ...current, ...nextCrop }))}
+          onZoomChange={(nextZoom) => onCropChange((current) => ({ ...current, zoom: nextZoom }))}
+          onCropComplete={(_croppedArea, croppedAreaPixels) => {
+            onCropChange((current) => ({ ...current, croppedAreaPixels }));
+          }}
+        />
+      </div>
+      <div className="crop-controls">
+        <label>
+          Zoom
+          <input
+            type="range"
+            min="1"
+            max="2.5"
+            step="0.05"
+            value={crop.zoom}
+            onChange={(event) => onCropChange((current) => ({ ...current, zoom: Number(event.target.value) }))}
+          />
+        </label>
+        <button type="button" className="ghost-button inline small" onClick={() => onCropChange(defaultPassportCrop)}>
+          Center Photo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboard({
   settings,
   tournament,
@@ -1944,10 +2991,13 @@ function AdminDashboard({
   setWebsiteContent,
   setMessage,
   loadAll,
+  setView,
   auctionResult,
-  setAuctionResult
+  setAuctionResult,
+  adminRole = 'admin'
 }) {
   const [tab, setTab] = useState('auction');
+  const canManagePasswords = adminRole === 'admin';
   const tabs = [
     { key: 'tournament', label: 'Tournament', icon: Trophy },
     { key: 'website', label: 'Website Control', icon: MonitorUp },
@@ -1957,18 +3007,55 @@ function AdminDashboard({
     { key: 'players', label: 'Players', icon: ListChecks },
     { key: 'standings', label: 'Standings', icon: Trophy },
     { key: 'reports', label: 'Reports', icon: Download },
-    { key: 'pamphlet', label: 'Pamphlet', icon: Printer }
-  ];
+    { key: 'pamphlet', label: 'Pamphlet', icon: Printer },
+    canManagePasswords && { key: 'security', label: 'Password', icon: Shield }
+  ].filter(Boolean);
 
   useEffect(() => {
     if (!selectedTournamentId) setTab('tournament');
-  }, [selectedTournamentId]);
+    if (!canManagePasswords && tab === 'security') setTab('auction');
+  }, [canManagePasswords, selectedTournamentId, tab]);
+
+  async function savePamphletDraft(pamphletDraft) {
+    if (!selectedTournamentId) return;
+    const content = mergeWebsiteContent({ ...websiteContent, pamphlet_draft: pamphletDraft });
+    setWebsiteContent(content);
+    const localSaved = await writeLocalWebsiteContent(selectedTournamentId, content);
+
+    try {
+      const { error } = await supabase
+        .from('website_content')
+        .upsert(
+          {
+            tournament_id: selectedTournamentId,
+            content,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'tournament_id' }
+        );
+      if (error) throw error;
+      setMessage('Pamphlet saved.');
+    } catch {
+      setMessage(localSaved
+        ? 'Pamphlet local save ho gaya. Online save ke liye Supabase SQL setup check karo.'
+        : 'Pamphlet save nahi hua. Image/data size chhota karke dobara try karo.');
+    }
+  }
+
+  function openTab(itemKey) {
+    if (itemKey === 'scoring') {
+      setView('scoring');
+      return;
+    }
+    setTab(itemKey);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }
 
   return (
     <div className="stack">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Admin Dashboard</p>
+          <p className="eyebrow">{adminRole === 'subadmin' ? 'Sub Admin Dashboard' : 'Admin Dashboard'}</p>
           <h1>{tournament?.name || 'Tournament Setup'}</h1>
         </div>
       </header>
@@ -1977,7 +3064,7 @@ function AdminDashboard({
         {tabs.map((item) => {
           const Icon = item.icon;
           return (
-            <button key={item.key} className={classNames(tab === item.key && 'active')} onClick={() => setTab(item.key)}>
+            <button key={item.key} className={classNames(tab === item.key && 'active')} onClick={() => openTab(item.key)}>
               <Icon size={17} />
               {item.label}
             </button>
@@ -2044,7 +3131,17 @@ function AdminDashboard({
       )}
       {tab === 'standings' && selectedTournamentId && <Standings teams={teams} players={players} settings={settings} />}
       {tab === 'reports' && selectedTournamentId && <AuctionHistoryReport tournament={tournament} teams={teams} players={players} settings={settings} />}
-      {tab === 'pamphlet' && <TournamentPamphlet tournament={tournament} settings={settings} teams={teams} players={players} />}
+      {tab === 'pamphlet' && (
+        <TournamentPamphlet
+          tournament={tournament}
+          settings={settings}
+          teams={teams}
+          players={players}
+          savedDraft={websiteContent?.pamphlet_draft}
+          onSaveDraft={savePamphletDraft}
+        />
+      )}
+      {tab === 'security' && canManagePasswords && <AdminPasswordAdmin setMessage={setMessage} />}
     </div>
   );
 }
@@ -2363,6 +3460,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
           name: titleCase(form.name.trim()),
           start_date: form.start_date || null,
           end_date: form.end_date || null,
+          auction_end_date: form.auction_end_date || null,
           address: form.address.trim() || null,
           logo_url: form.logo_url.trim() || null,
           description: form.description.trim() || null
@@ -2370,7 +3468,9 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         .eq('id', editingTournamentId);
       setBusy(false);
 
-      if (error) return setMessage(error.message);
+      if (error) return setMessage(error.message.includes('auction_end_date')
+        ? `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${error.message}`
+        : error.message);
       selectTournament(editingTournamentId);
       await loadTournamentsAndCurrentData();
       setMessage('Tournament details updated.');
@@ -2383,6 +3483,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         name: titleCase(form.name.trim()),
         start_date: form.start_date || null,
         end_date: form.end_date || null,
+        auction_end_date: form.auction_end_date || null,
         address: form.address.trim() || null,
         logo_url: form.logo_url.trim() || null,
         description: form.description.trim() || null
@@ -2391,7 +3492,9 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
       .single();
     setBusy(false);
 
-    if (error) return setMessage(error.message);
+    if (error) return setMessage(error.message.includes('auction_end_date')
+      ? `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${error.message}`
+      : error.message);
     await supabase.from('tournament_settings').upsert({ tournament_id: data.id });
     setEditingTournamentId(data.id);
     selectTournament(data.id);
@@ -2413,6 +3516,28 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
     }
     await loadTournamentsAndCurrentData();
     setMessage('Tournament deleted.');
+  }
+
+  async function deleteSelectedTournaments(selectedTournaments) {
+    if (!selectedTournaments.length) return false;
+    const confirmed = window.confirm(`Delete ${selectedTournaments.length} selected tournaments? Inke teams, players aur auction logs bhi delete honge.`);
+    if (!confirmed) return false;
+
+    const selectedIds = selectedTournaments.map((item) => item.id);
+    const { error } = await supabase.from('tournaments').delete().in('id', selectedIds);
+    if (error) {
+      setMessage(error.message);
+      return false;
+    }
+    if (selectedIds.includes(selectedTournamentId)) {
+      localStorage.removeItem('cpl-selected-tournament-id');
+      sessionStorage.removeItem('cpl-player-session');
+      sessionStorage.removeItem('cpl-owner-session');
+    }
+    if (selectedIds.includes(editingTournamentId)) startCreate();
+    await loadTournamentsAndCurrentData();
+    setMessage(`${selectedTournaments.length} tournaments deleted.`);
+    return true;
   }
 
   return (
@@ -2444,6 +3569,10 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
             <label>
               End Date
               <input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
+            </label>
+            <label>
+              Auction End Date
+              <input type="date" value={form.auction_end_date} onChange={(e) => setForm({ ...form, auction_end_date: e.target.value })} />
             </label>
             <label>
               Logo Upload
@@ -2495,22 +3624,65 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         onSelect={selectTournament}
         onEdit={startEdit}
         onDelete={deleteTournament}
+        onBulkDelete={deleteSelectedTournaments}
       />
     </div>
   );
 }
 
-function TournamentTable({ tournaments, selectedTournamentId, onSelect, onEdit, onDelete }) {
+function TournamentTable({ tournaments, selectedTournamentId, onSelect, onEdit, onDelete, onBulkDelete }) {
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const selectedCount = selectedIds.size;
+  const allSelected = tournaments.length > 0 && tournaments.every((item) => selectedIds.has(item.id));
+
+  function toggleSelected(tournamentId) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(tournamentId)) next.delete(tournamentId);
+      else next.add(tournamentId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allSelected) tournaments.forEach((item) => next.delete(item.id));
+      else tournaments.forEach((item) => next.add(item.id));
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    if (!onBulkDelete) return;
+    const selectedTournaments = tournaments.filter((item) => selectedIds.has(item.id));
+    const deleted = await onBulkDelete(selectedTournaments);
+    if (deleted) setSelectedIds(new Set());
+  }
+
   return (
     <section className="panel table-panel">
-      <div className="section-title">
-        <Trophy size={20} />
-        <h2>Tournament Details</h2>
+      <div className="table-topbar">
+        <div className="section-title">
+          <Trophy size={20} />
+          <h2>Tournament Details</h2>
+        </div>
+        <div className="table-tools">
+          <label className="checkbox-line">
+            <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+            Select All
+          </label>
+          <span className="summary-pill">{selectedCount} Selected</span>
+          <button type="button" className="danger-button small" onClick={deleteSelected} disabled={!selectedCount}>
+            <Trash2 size={15} /> Delete Selected
+          </button>
+        </div>
       </div>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th>Select</th>
               <th>Name</th>
               <th>Dates</th>
               <th>Address</th>
@@ -2522,6 +3694,9 @@ function TournamentTable({ tournaments, selectedTournamentId, onSelect, onEdit, 
           <tbody>
             {tournaments.map((item) => (
               <tr key={item.id}>
+                <td>
+                  <input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleSelected(item.id)} />
+                </td>
                 <td>{item.name}</td>
                 <td>{formatDateRange(item.start_date, item.end_date)}</td>
                 <td>{item.address || '-'}</td>
@@ -2544,7 +3719,7 @@ function TournamentTable({ tournaments, selectedTournamentId, onSelect, onEdit, 
             ))}
             {!tournaments.length && (
               <tr>
-                <td colSpan="6">No tournament added yet.</td>
+                <td colSpan="7">No tournament added yet.</td>
               </tr>
             )}
           </tbody>
@@ -2554,7 +3729,64 @@ function TournamentTable({ tournaments, selectedTournamentId, onSelect, onEdit, 
   );
 }
 
-function TournamentPamphlet({ tournament, settings, teams, players }) {
+function TournamentPamphlet({ tournament, settings, teams, players, editable = true, showPrintButton = true, savedDraft, onSaveDraft }) {
+  const registeredPlayers = players.length;
+  const auctionPlayers = players.filter((player) => player.sold_status !== 'Unsold').length;
+  const activeTeams = teams.length ? teams : Array.from({ length: Math.min(toNumber(settings.team_count, 4), 4) }, (_, index) => ({
+    id: `sample-${index}`,
+    team_name: `Team ${index + 1}`
+  }));
+  const defaultDraft = {
+    title: tournament?.name || 'Cricket Premier',
+    subtitle: 'Tennis Ball Cricket Tournament',
+    cupLine: '30 Yard Cup 2026',
+    startLine: `Match start from ${formatDate(tournament?.start_date) || 'Date to be announced'}`,
+    entryFee: '2000',
+    firstPrize: '7000',
+    secondPrize: '3500',
+    scheduleMode: 'single',
+    poolAssignments: {},
+    matchesPerDay: '1',
+    sundayMatches: '2',
+    playoffMatches: '3',
+    playoffMatchesPerDay: '1',
+    firstMatchTime: '07:00',
+    matchGapMinutes: '150',
+    venue: tournament?.address || 'Venue to be announced',
+    rules: [
+      '7 Over Match',
+      '2 Bowler 2-2 Over',
+      '3 Bowler 1-1 Over',
+      'Match count per day as selected',
+      'Play Fair & Respect',
+      "Umpire's Decision Final"
+    ].join('\n'),
+    format: [
+      `Total ${activeTeams.length} Teams`,
+      'League Matches (Round Robin)',
+      'Playoff matches as selected',
+      'Each match 7 Over',
+      'Sunday match count as selected',
+      "Umpire's Decision Final"
+    ].join('\n'),
+    awards: [
+      'Man of the Match - Rs 1000',
+      'Match of the Tournament - Rs 1000',
+      'Best Bowler - Rs 500',
+      'Best Batsman - Rs 500',
+      'Best Catch - Rs 500'
+    ].join('\n'),
+    footer: "Let's make this tournament a grand success"
+  };
+  const savedDraftKey = JSON.stringify(savedDraft || {});
+  const initialDraft = { ...defaultDraft, ...(savedDraft || {}) };
+  const [draft, setDraft] = useState(initialDraft);
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  useEffect(() => {
+    setDraft({ ...defaultDraft, ...(savedDraft || {}) });
+  }, [tournament?.id, teams.length, savedDraftKey]);
+
   if (!tournament) {
     return (
       <section className="panel form-panel">
@@ -2564,18 +3796,527 @@ function TournamentPamphlet({ tournament, settings, teams, players }) {
     );
   }
 
-  const registeredPlayers = players.length;
-  const auctionPlayers = players.filter((player) => player.sold_status !== 'Unsold').length;
+  function updateDraft(key, value) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  async function saveCurrentDraft() {
+    if (!onSaveDraft) return;
+    setSavingDraft(true);
+    await onSaveDraft(draft);
+    setSavingDraft(false);
+  }
+
+  function textLines(value) {
+    return String(value || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  function addDays(value, days) {
+    const base = value ? new Date(`${value}T00:00:00`) : new Date();
+    base.setDate(base.getDate() + days);
+    return base;
+  }
+
+  function localDateValue(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function matchTimeForSlot(slotIndex) {
+    const [hourText = '7', minuteText = '0'] = String(draft.firstMatchTime || '07:00').split(':');
+    const startMinutes = toNumber(hourText, 7) * 60 + toNumber(minuteText, 0);
+    const totalMinutes = startMinutes + slotIndex * Math.max(30, toNumber(draft.matchGapMinutes, 150));
+    const hours = Math.floor(totalMinutes / 60) % 24;
+    const minutes = totalMinutes % 60;
+    const suffix = hours >= 12 ? 'PM' : 'AM';
+    const hour12 = hours % 12 || 12;
+    return `${hour12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+  }
+
+  function buildRoundRobinPairs(teamList, poolLabel = '') {
+    const pairs = [];
+    for (let outer = 0; outer < teamList.length; outer += 1) {
+      for (let inner = outer + 1; inner < teamList.length; inner += 1) {
+        pairs.push({ teamA: teamList[outer], teamB: teamList[inner], poolLabel });
+      }
+    }
+    return pairs;
+  }
+
+  function leaguePairs() {
+    if (draft.scheduleMode === 'pools') {
+      const [poolA, poolB] = poolTeams();
+      const poolAPairs = buildRoundRobinPairs(poolA, 'Pool - A');
+      const poolBPairs = buildRoundRobinPairs(poolB, 'Pool - B');
+      const alternatingPairs = [];
+      const pairCount = Math.max(poolAPairs.length, poolBPairs.length);
+      for (let index = 0; index < pairCount; index += 1) {
+        if (poolAPairs[index]) alternatingPairs.push(poolAPairs[index]);
+        if (poolBPairs[index]) alternatingPairs.push(poolBPairs[index]);
+      }
+      return alternatingPairs;
+    }
+    return buildRoundRobinPairs(activeTeams);
+  }
+
+  function poolTeams() {
+    const splitIndex = Math.ceil(activeTeams.length / 2);
+    const assignments = draft.poolAssignments || {};
+    const poolA = [];
+    const poolB = [];
+    activeTeams.forEach((team, index) => {
+      const savedPool = assignments[String(team.id)];
+      const pool = savedPool === 'A' || savedPool === 'B' ? savedPool : (index < splitIndex ? 'A' : 'B');
+      if (pool === 'B') poolB.push(team);
+      else poolA.push(team);
+    });
+    return [poolA, poolB];
+  }
+
+  function teamColorStyle(team) {
+    const index = activeTeams.findIndex((item) => item.id === team?.id);
+    const safeIndex = Math.max(0, index);
+    const hue = Math.round((safeIndex * 137.508) % 360);
+    const secondHue = (hue + 24) % 360;
+    return {
+      background: `linear-gradient(135deg, hsl(${hue} 78% 42%), hsl(${secondHue} 82% 27%))`
+    };
+  }
+
+  function updateTeamPool(teamId, pool) {
+    setDraft((current) => ({
+      ...current,
+      poolAssignments: {
+        ...(current.poolAssignments || {}),
+        [String(teamId)]: pool
+      }
+    }));
+  }
+
+  function chunkItems(items, size) {
+    const chunks = [];
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size));
+    }
+    return chunks.length ? chunks : [[]];
+  }
+
+  function scheduleRows() {
+    const pairs = leaguePairs();
+    const sundayMatches = Math.min(4, Math.max(1, toNumber(draft.sundayMatches, 2)));
+    const matchesPerDay = Math.min(4, Math.max(1, toNumber(draft.matchesPerDay, 1)));
+    const playoffMatches = Math.min(5, Math.max(1, toNumber(draft.playoffMatches, 3)));
+    const playoffMatchesPerDay = Math.min(3, Math.max(1, toNumber(draft.playoffMatchesPerDay, 1)));
+    const playoffNames = ['Semifinal / Qualifier', 'Semifinal / Eliminator', 'Final', 'Reserve Final', 'Super Final'];
+    const leagueRows = [];
+    let scheduleDate = addDays(tournament.start_date, 0);
+    let pairIndex = 0;
+    while (pairIndex < pairs.length) {
+      const matchesForDay = scheduleDate.getDay() === 0 ? sundayMatches : matchesPerDay;
+      for (let slotIndex = 0; slotIndex < matchesForDay && pairIndex < pairs.length; slotIndex += 1) {
+        const { teamA, teamB, poolLabel } = pairs[pairIndex];
+        leagueRows.push({
+          no: leagueRows.length + 1,
+          date: formatDate(localDateValue(scheduleDate)),
+          day: new Intl.DateTimeFormat('en-IN', { weekday: 'long' }).format(scheduleDate),
+          time: matchTimeForSlot(slotIndex),
+          teamA,
+          teamB,
+          poolLabel,
+          match: `${teamA.team_name} vs ${teamB.team_name}`,
+          type: 'league'
+        });
+        pairIndex += 1;
+      }
+      scheduleDate = addDays(localDateValue(scheduleDate), 1);
+    }
+    const playoffStart = leagueRows.length;
+    const playoffDate = localDateValue(scheduleDate);
+    const playoffRows = Array.from({ length: playoffMatches }, (_, index) => {
+      const dayOffset = Math.floor(index / playoffMatchesPerDay);
+      const slotIndex = index % playoffMatchesPerDay;
+      const date = addDays(playoffDate, dayOffset);
+      return {
+        no: playoffStart + index + 1,
+        date: formatDate(localDateValue(date)),
+        day: index === playoffMatches - 1 ? 'Final' : 'Playoffs',
+        time: matchTimeForSlot(slotIndex),
+        match: playoffNames[index] || `Playoff ${index + 1}`,
+        type: 'playoff'
+      };
+    });
+    return [...leagueRows, ...playoffRows];
+  }
+
+  const generatedScheduleRows = scheduleRows();
+  const [poolATeams, poolBTeams] = poolTeams();
+  const schedulePages = chunkItems(generatedScheduleRows, 5);
+  const teamPages = chunkItems(activeTeams, activeTeams.length > 8 ? 16 : 8);
+  const coverTeams = draft.scheduleMode === 'pools'
+    ? [...poolATeams.slice(0, 2), ...poolBTeams.slice(0, 2)]
+    : activeTeams.slice(0, 4);
+  const awardIcons = [Trophy, Crown, Star, Shield, BadgeIndianRupee];
+
+  function renderAwards() {
+    return textLines(draft.awards).slice(0, 5).map((line, index) => {
+      const AwardIcon = awardIcons[index % awardIcons.length];
+      return (
+        <span key={line}>
+          <AwardIcon aria-hidden="true" />
+          <strong>{line}</strong>
+        </span>
+      );
+    });
+  }
+
+  function renderPoolTeamColumns(withLogos = false, visibleTeams = activeTeams) {
+    const visibleIds = new Set(visibleTeams.map((team) => String(team.id)));
+    const pools = [
+      { label: 'Pool - A', className: 'pool-a', teams: poolATeams.filter((team) => visibleIds.has(String(team.id))) },
+      { label: 'Pool - B', className: 'pool-b', teams: poolBTeams.filter((team) => visibleIds.has(String(team.id))) }
+    ];
+    return (
+      <div className={classNames('pamphlet-pool-grid', withLogos && 'with-logos')}>
+        {pools.map((pool) => (
+          <div key={pool.label} className={classNames('pamphlet-pool-column', pool.className)}>
+            <h3>{pool.label}</h3>
+            <div className={withLogos ? 'pamphlet-pool-team-logos' : 'pamphlet-pool-team-chips'}>
+              {pool.teams.map((team) => (
+                <div key={team.id} className="pamphlet-pool-team" style={teamColorStyle(team)}>
+                  {withLogos && (team.logo_url ? <img src={team.logo_url} alt={`${team.team_name} logo`} /> : <Shield size={36} />)}
+                  <strong>{team.team_name}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="pamphlet-workspace">
-      <div className="button-row no-print">
-        <button className="primary-button" onClick={() => window.print()}>
-          <Printer size={18} /> Print A4 Pamphlet
-        </button>
+    <div className={classNames('pamphlet-workspace', !editable && 'public-pamphlet-workspace')}>
+      {editable && (
+        <section className="panel form-panel no-print">
+          <div className="section-title">
+            <Printer size={20} />
+            <h2>Editable A4 Pamphlet</h2>
+          </div>
+          <div className="control-grid">
+            <label>
+              Main Title
+              <input value={draft.title} onChange={(event) => updateDraft('title', titleCase(event.target.value))} />
+            </label>
+            <label>
+              Subtitle
+              <input value={draft.subtitle} onChange={(event) => updateDraft('subtitle', titleCase(event.target.value))} />
+            </label>
+            <label>
+              Cup Line
+              <input value={draft.cupLine} onChange={(event) => updateDraft('cupLine', titleCase(event.target.value))} />
+            </label>
+            <label>
+              Start Line
+              <input value={draft.startLine} onChange={(event) => updateDraft('startLine', titleCase(event.target.value))} />
+            </label>
+            <label>
+              Entry Fee
+              <input inputMode="numeric" value={draft.entryFee} onChange={(event) => updateDraft('entryFee', numericText(event.target.value))} />
+            </label>
+            <label>
+              1st Prize
+              <input inputMode="numeric" value={draft.firstPrize} onChange={(event) => updateDraft('firstPrize', numericText(event.target.value))} />
+            </label>
+            <label>
+              2nd Prize
+              <input inputMode="numeric" value={draft.secondPrize} onChange={(event) => updateDraft('secondPrize', numericText(event.target.value))} />
+            </label>
+            <label>
+              Schedule Type
+              <select value={draft.scheduleMode} onChange={(event) => updateDraft('scheduleMode', event.target.value)}>
+                <option value="single">Single League / Round Robin</option>
+                <option value="pools">2 Pool League</option>
+              </select>
+            </label>
+            <label>
+              Per Day Matches
+              <select value={draft.matchesPerDay} onChange={(event) => updateDraft('matchesPerDay', event.target.value)}>
+                <option value="1">1 Match</option>
+                <option value="2">2 Matches</option>
+                <option value="3">3 Matches</option>
+                <option value="4">4 Matches</option>
+              </select>
+            </label>
+            <label>
+              Sunday Matches
+              <select value={draft.sundayMatches} onChange={(event) => updateDraft('sundayMatches', event.target.value)}>
+                <option value="1">1 Match</option>
+                <option value="2">2 Matches</option>
+                <option value="3">3 Matches</option>
+                <option value="4">4 Matches</option>
+              </select>
+            </label>
+            <label>
+              Playoff Matches
+              <select value={draft.playoffMatches} onChange={(event) => updateDraft('playoffMatches', event.target.value)}>
+                <option value="1">1 Match</option>
+                <option value="2">2 Matches</option>
+                <option value="3">3 Matches</option>
+                <option value="4">4 Matches</option>
+                <option value="5">5 Matches</option>
+              </select>
+            </label>
+            <label>
+              Playoff Per Day
+              <select value={draft.playoffMatchesPerDay} onChange={(event) => updateDraft('playoffMatchesPerDay', event.target.value)}>
+                <option value="1">1 Match</option>
+                <option value="2">2 Matches</option>
+                <option value="3">3 Matches</option>
+              </select>
+            </label>
+            <label>
+              First Match Time
+              <input type="time" value={draft.firstMatchTime} onChange={(event) => updateDraft('firstMatchTime', event.target.value)} />
+            </label>
+            <label>
+              Match Gap
+              <select value={draft.matchGapMinutes} onChange={(event) => updateDraft('matchGapMinutes', event.target.value)}>
+                <option value="30">30 Min</option>
+                <option value="60">1 Hour</option>
+                <option value="90">1 Hour 30 Min</option>
+                <option value="120">2 Hours</option>
+                <option value="150">2 Hours 30 Min</option>
+                <option value="180">3 Hours</option>
+              </select>
+            </label>
+          </div>
+          {draft.scheduleMode === 'pools' && (
+            <div className="pool-assignment-editor">
+              <div className="section-title">
+                <Shuffle size={18} />
+                <h3>Manual Pool Assignment</h3>
+              </div>
+              <div className="pool-assignment-grid">
+                {activeTeams.map((team, index) => {
+                  const currentPool = (draft.poolAssignments || {})[String(team.id)] || (index < Math.ceil(activeTeams.length / 2) ? 'A' : 'B');
+                  return (
+                    <label key={team.id}>
+                      <span className="team-color-swatch" style={teamColorStyle(team)} />
+                      <strong>{team.team_name}</strong>
+                      <select value={currentPool} onChange={(event) => updateTeamPool(team.id, event.target.value)}>
+                        <option value="A">Pool - A</option>
+                        <option value="B">Pool - B</option>
+                      </select>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <label>
+            Venue
+            <input value={draft.venue} onChange={(event) => updateDraft('venue', titleCase(event.target.value))} />
+          </label>
+          <div className="control-grid">
+            <label>
+              Match Rules
+              <textarea rows="6" value={draft.rules} onChange={(event) => updateDraft('rules', event.target.value)} />
+            </label>
+            <label>
+              Tournament Format
+              <textarea rows="6" value={draft.format} onChange={(event) => updateDraft('format', event.target.value)} />
+            </label>
+            <label>
+              Prizes & Awards
+              <textarea rows="6" value={draft.awards} onChange={(event) => updateDraft('awards', event.target.value)} />
+            </label>
+          </div>
+          <label>
+            Footer Message
+            <input value={draft.footer} onChange={(event) => updateDraft('footer', titleCase(event.target.value))} />
+          </label>
+        </section>
+      )}
+
+      {showPrintButton && (
+        <div className="button-row no-print">
+          {editable && onSaveDraft && (
+            <button type="button" className="accent-button" onClick={saveCurrentDraft} disabled={savingDraft}>
+              <Save size={18} /> {savingDraft ? 'Saving...' : 'Save Pamphlet'}
+            </button>
+          )}
+          <button className="primary-button" onClick={() => window.print()}>
+            <Printer size={18} /> Print / Save A4 PDF
+          </button>
+        </div>
+      )}
+
+      <div className="pamphlet-set">
+        <section className="pamphlet-poster pamphlet-cover">
+          <div className="pamphlet-skyline" />
+          <div className="pamphlet-corner left">Play<br />Fair<br />Respect<br />Enjoy</div>
+          <div className="pamphlet-corner right">Small<br />Town<br />Big<br />Passion</div>
+          <div className="pamphlet-title-lockup">
+            <Crown size={36} />
+            <h1>{draft.title}</h1>
+            <strong>{draft.subtitle}</strong>
+            <span>{draft.cupLine}</span>
+          </div>
+          <div className="pamphlet-venue">
+            <MapPin size={20} />
+            <b>{draft.venue}</b>
+          </div>
+          <div className="pamphlet-card-grid">
+            <div className="pamphlet-box">
+              <h3>Teams</h3>
+              {draft.scheduleMode === 'pools' ? renderPoolTeamColumns(false, coverTeams) : (
+                <div className="pamphlet-team-chips">
+                  {coverTeams.map((team) => (
+                    <span key={team.id} style={teamColorStyle(team)}>{team.team_name}</span>
+                  ))}
+                </div>
+              )}
+              {activeTeams.length > coverTeams.length && (
+                <small className="pamphlet-more-teams">+{activeTeams.length - coverTeams.length} more teams on Team List page</small>
+              )}
+            </div>
+            <div className="pamphlet-box">
+              <h3>Match Rules</h3>
+              <ul>
+                {textLines(draft.rules).map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </div>
+          </div>
+          <div className="pamphlet-prize-strip">
+            <div><span>Entry Fee</span><strong>Rs {draft.entryFee || 0}</strong></div>
+            <Trophy size={88} />
+            <div><span>Registered</span><strong>{registeredPlayers}</strong></div>
+          </div>
+          <div className="pamphlet-award-row">
+            {renderAwards()}
+          </div>
+          <footer>{draft.footer}</footer>
+        </section>
+
+        {schedulePages.map((pageRows, pageIndex) => {
+          const isLastPage = pageIndex === schedulePages.length - 1;
+          return (
+            <section key={`schedule-${pageIndex}`} className="pamphlet-poster pamphlet-schedule">
+              <div className="pamphlet-page-number">Match Schedule - Page {pageIndex + 1} / {schedulePages.length}</div>
+              <div className="pamphlet-title-lockup compact">
+                <Crown size={30} />
+                <h1>{draft.title}</h1>
+                <strong>{draft.startLine}</strong>
+              </div>
+              <div className="pamphlet-schedule-summary">
+                <span>{draft.scheduleMode === 'pools' ? '2 Pool League' : 'Single League / Round Robin'}</span>
+                <span>{leaguePairs().length} League Matches</span>
+                <span>{generatedScheduleRows.length} Total Matches</span>
+              </div>
+              <table className="pamphlet-schedule-table">
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>Date</th>
+                    <th>Day</th>
+                    <th>Time</th>
+                    <th>Match</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((row) => (
+                    <tr key={`${row.no}-${row.match}`}>
+                      <td>{row.no}</td>
+                      <td>{row.date}</td>
+                      <td>{row.day}</td>
+                      <td>{row.time}</td>
+                      <td className="pamphlet-match-cell">
+                        {row.type === 'league' ? (
+                          <div className="pamphlet-matchup">
+                            {row.poolLabel && (
+                              <span className={classNames('pamphlet-pool-label', row.poolLabel.includes('B') && 'pool-b')}>
+                                {row.poolLabel}
+                              </span>
+                            )}
+                            <span className="pamphlet-match-team" style={teamColorStyle(row.teamA)}>{row.teamA.team_name}</span>
+                            <b>vs</b>
+                            <span className="pamphlet-match-team" style={teamColorStyle(row.teamB)}>{row.teamB.team_name}</span>
+                          </div>
+                        ) : (
+                          <strong className="pamphlet-playoff-match">{row.match}</strong>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="pamphlet-playoff-band">{isLastPage ? 'Playoffs' : `Continued on Page ${pageIndex + 2}`}</div>
+              {isLastPage && <div className="pamphlet-slogan">Same Ground, Same Passion, A New Champion</div>}
+              <footer>Cricket Today, Better Tomorrow</footer>
+            </section>
+          );
+        })}
+
+        {teamPages.map((pageTeams, pageIndex) => {
+          const wideTeamPage = activeTeams.length >= 8;
+          return (
+            <section
+              key={`teams-${pageIndex}`}
+              className={classNames('pamphlet-poster pamphlet-format', wideTeamPage && 'wide-team-poster')}
+            >
+              <div className="pamphlet-page-number">Team List - Page {pageIndex + 1} / {teamPages.length}</div>
+              <div className="pamphlet-title-lockup compact">
+                <Crown size={30} />
+                <h1>{draft.title}</h1>
+                <strong>Team List & Tournament Format</strong>
+              </div>
+              {draft.scheduleMode === 'pools' ? renderPoolTeamColumns(true, pageTeams) : (
+                <div className="pamphlet-logo-grid">
+                  {pageTeams.map((team) => (
+                    <div key={team.id} className="pamphlet-team-logo" style={teamColorStyle(team)}>
+                      {team.logo_url ? <img src={team.logo_url} alt={`${team.team_name} logo`} /> : <Shield size={42} />}
+                      <strong>{team.team_name}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <footer>{draft.footer}</footer>
+            </section>
+          );
+        })}
+
+        <section className="pamphlet-poster pamphlet-format pamphlet-format-details">
+          <div className="pamphlet-page-number">Format & Prizes</div>
+          <div className="pamphlet-title-lockup compact">
+            <Trophy size={34} />
+            <h1>{draft.title}</h1>
+            <strong>Tournament Format & Prizes</strong>
+          </div>
+          <div className="pamphlet-info-panel">
+            <h3>Tournament Format</h3>
+            <ul>
+              {textLines(draft.format).map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          </div>
+          <div className="pamphlet-prize-cards">
+            <div><span>1st Prize</span><strong>Rs {draft.firstPrize || 0}</strong></div>
+            <div><span>2nd Prize</span><strong>Rs {draft.secondPrize || 0}</strong></div>
+            <div><span>Auction Mode</span><strong>{settings.currency_mode}</strong></div>
+            <div><span>Auction Players</span><strong>{auctionPlayers}</strong></div>
+          </div>
+          <div className="pamphlet-award-row">
+            {renderAwards()}
+          </div>
+          <footer>{draft.footer}</footer>
+        </section>
       </div>
 
-      <section className="pamphlet-a4">
+      <section className="pamphlet-a4 legacy-pamphlet">
         <div className="pamphlet-header">
           {tournament.logo_url ? (
             <img src={tournament.logo_url} alt={`${tournament.name} logo`} />
@@ -2643,12 +4384,22 @@ function CurrencyAndTournament({ settings, tournaments, selectedTournamentId, se
       )}
       <label className="compact-field">
         Teams
-        <select value={settings.team_count} onChange={(e) => updateSetting({ team_count: Number(e.target.value) })}>
-          {allowedTeamCounts.map((count) => (
-            <option key={count} value={count}>{count}</option>
-          ))}
-        </select>
+        <input
+          inputMode="numeric"
+          list="team-count-options"
+          min="1"
+          value={settings.team_count || ''}
+          onChange={(e) => {
+            const count = toNumber(e.target.value);
+            if (count > 0) updateSetting({ team_count: count });
+          }}
+        />
       </label>
+      <datalist id="team-count-options">
+        {suggestedTeamCounts.map((count) => (
+          <option key={count} value={count} />
+        ))}
+      </datalist>
       <div className="segmented" role="group" aria-label="Currency mode">
         <button
           type="button"
@@ -2980,7 +4731,8 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
   const [form, setForm] = useState(blankTeam);
   const [editingTeamId, setEditingTeamId] = useState(null);
   const [ownerPins, setOwnerPins] = useState({});
-  const teamsRemaining = Math.max(0, settings.team_count - teams.length);
+  const teamLimit = toNumber(settings.team_count, defaultTeamLimit);
+  const teamsRemaining = Math.max(0, teamLimit - teams.length);
 
   useEffect(() => {
     async function loadOwnerPins() {
@@ -3020,10 +4772,12 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
 
   async function saveTeam(event) {
     event.preventDefault();
-    if (!editingTeamId && teams.length >= settings.team_count) return setMessage('Configured team limit reached.');
+    if (!editingTeamId && teams.length >= teamLimit) return setMessage('Configured team limit reached. Tournament settings me Teams limit badhao.');
     const totalBudget = toNumber(form.total_budget);
     const ownerMobile = digitsOnly(form.owner_mobile);
     const ownerPin = numericText(form.owner_pin) || ownerMobile.slice(-4);
+    const maxPlayers = toNumber(form.max_players, defaultTeamLimit);
+    if (maxPlayers <= 0) return setMessage('Max players 0 se jyada hona chahiye.');
     if (ownerMobile && ownerMobile.length !== 10) return setMessage('Owner mobile number 10 digit hona chahiye.');
     if (ownerMobile && ownerPin.length < 4) return setMessage('Owner PIN minimum 4 digit hona chahiye.');
     const payload = {
@@ -3032,7 +4786,7 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
       owner_mobile: ownerMobile || null,
       total_budget: totalBudget,
       remaining_budget: editingTeamId ? toNumber(form.remaining_budget, totalBudget) : totalBudget,
-      max_players: toNumber(form.max_players, 16),
+      max_players: maxPlayers,
       current_player_count: editingTeamId ? toNumber(form.current_player_count, 0) : 0
     };
 
@@ -3063,6 +4817,20 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
     if (error) return setMessage(error.message);
     if (editingTeamId === team.id) resetTeamForm();
     setMessage('Team deleted.');
+  }
+
+  async function deleteSelectedTeams(selectedTeams) {
+    if (!selectedTeams.length) return false;
+    const confirmed = window.confirm(`Delete ${selectedTeams.length} selected teams? Sold players se team assignment remove ho sakta hai.`);
+    if (!confirmed) return false;
+    const { error } = await supabase.from('teams').delete().in('id', selectedTeams.map((team) => team.id));
+    if (error) {
+      setMessage(error.message);
+      return false;
+    }
+    if (selectedTeams.some((team) => team.id === editingTeamId)) resetTeamForm();
+    setMessage(`${selectedTeams.length} teams deleted.`);
+    return true;
   }
 
   return (
@@ -3111,7 +4879,12 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
         )}
         <label>
           Max Players
-          <input inputMode="numeric" value={form.max_players} onChange={(e) => setForm({ ...form, max_players: numericText(e.target.value) })} required />
+          <input
+            inputMode="numeric"
+            value={form.max_players}
+            onChange={(e) => setForm({ ...form, max_players: numericText(e.target.value) })}
+            placeholder={`Blank = ${defaultTeamLimit}`}
+          />
         </label>
         {editingTeamId && (
           <label>
@@ -3132,7 +4905,7 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
         </div>
       </form>
 
-      <TeamTable teams={teams} players={players} settings={settings} onEdit={editTeam} onDelete={deleteTeam} />
+      <TeamTable teams={teams} players={players} settings={settings} onEdit={editTeam} onDelete={deleteTeam} onBulkDelete={deleteSelectedTeams} />
     </div>
   );
 }
@@ -3168,7 +4941,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
 
     setBusy(true);
     try {
-      const photoData = files.photo ? await imageFileToCompressedDataUrl(files.photo, 520, 680, 0.78) : form.photo_url;
+      const photoData = files.photo ? await imageFileToPassportDataUrl(files.photo, files.photoCrop) : form.photo_url;
       const paymentData = files.payment ? await imageFileToCompressedDataUrl(files.payment, 900, 1100, 0.68) : form.payment_screenshot_url;
       const aadhaarData = files.aadhaar ? await imageFileToCompressedDataUrl(files.aadhaar, 900, 1100, 0.68) : form.aadhaar_card_url;
 
@@ -3372,6 +5145,45 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
     URL.revokeObjectURL(link.href);
   }
 
+  function downloadPlayersList() {
+    const teamNameById = teams.reduce((map, team) => ({ ...map, [team.id]: team.team_name }), {});
+    const headers = [
+      'full_name',
+      'mobile_number',
+      'category',
+      'player_criteria',
+      'base_price',
+      'paid_amount',
+      'sold_status',
+      'final_bid_price',
+      'assigned_team',
+      'tshirt_size',
+      'tshirt_number'
+    ];
+    const rows = players.map((player) => [
+      player.full_name,
+      player.mobile_number,
+      player.category || '',
+      playerCriteria(player),
+      player.base_price || 0,
+      playerMeta(player, 'paid_amount') || 0,
+      player.sold_status || '',
+      player.final_bid_price || '',
+      teamNameById[player.assigned_team_id] || '',
+      playerMeta(player, 'tshirt_size') || '',
+      playerMeta(player, 'tshirt_number') || ''
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `cpl-tournament-${selectedTournamentId || 'players'}-players-list.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   function printBlankPlayerList() {
     const printableColumns = [
       'S.No',
@@ -3516,9 +5328,14 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
               <ListChecks size={20} />
               <h2>Players Table</h2>
             </div>
-            <button className="primary-button" onClick={openAddForm}>
-              <Plus size={18} /> Add New Player
-            </button>
+            <div className="button-row">
+              <button className="accent-button" onClick={downloadPlayersList} disabled={!players.length}>
+                <Download size={18} /> Download Players List
+              </button>
+              <button className="primary-button" onClick={openAddForm}>
+                <Plus size={18} /> Add New Player
+              </button>
+            </div>
           </div>
 
           <section className="panel import-panel">
@@ -3611,6 +5428,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
             onEdit={editPlayer}
             onDelete={deletePlayer}
             onBulkDelete={deleteSelectedPlayers}
+            onMessageMarked={loadAll}
           />
         </>
       )}
@@ -3635,11 +5453,15 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
   const [photoPreview, setPhotoPreview] = useState(playerMeta(player, 'photo_url') || player?.photo_url || '');
   const [paymentPreview, setPaymentPreview] = useState('');
   const [aadhaarPreview, setAadhaarPreview] = useState('');
+  const [photoCrop, setPhotoCrop] = useState(defaultPassportCrop);
+  const fixedCriteriaSelected = playerCriteriaOptions.includes(form.player_criteria);
+  const showPaidAmountField = Boolean(paymentFile || paymentPreview || form.payment_screenshot_url);
 
   function updatePhoto(file) {
     setPhotoFile(file || null);
     if (photoPreview?.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
     setPhotoPreview(file ? URL.createObjectURL(file) : playerMeta(player, 'photo_url') || player?.photo_url || '');
+    setPhotoCrop(defaultPassportCrop);
   }
 
   function updatePaymentFile(file) {
@@ -3656,7 +5478,7 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
 
   function submit(event) {
     event.preventDefault();
-    onSave(form, { photo: photoFile, payment: paymentFile, aadhaar: aadhaarFile });
+    onSave(form, { photo: photoFile, photoCrop, payment: paymentFile, aadhaar: aadhaarFile });
   }
 
   return (
@@ -3666,9 +5488,7 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
           <Camera size={20} />
           <h2>{player ? 'Edit Player' : 'Add Player'}</h2>
         </div>
-        <div className="photo-preview">
-          {photoPreview ? <img src={photoPreview} alt="Player preview" /> : <Camera size={36} />}
-        </div>
+        <PhotoCropControl preview={photoPreview} crop={photoCrop} onCropChange={setPhotoCrop} emptyIcon={<Camera size={36} />} />
         <label className="file-button wide">
           <Camera size={18} />
           Select Photo
@@ -3703,13 +5523,26 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
         </label>
         <label>
           Player Criteria (Admin Only)
-          <input
-            list="player-criteria-options"
-            value={form.player_criteria}
-            onChange={(e) => setForm({ ...form, player_criteria: titleCase(e.target.value) })}
-            placeholder="Silver Player, Gold Player..."
-          />
+          <select
+            value={fixedCriteriaSelected ? form.player_criteria : '__custom'}
+            onChange={(e) => setForm({ ...form, player_criteria: e.target.value === '__custom' ? '' : e.target.value })}
+          >
+            {playerCriteriaOptions.map((criteria) => (
+              <option key={criteria} value={criteria}>{criteria}</option>
+            ))}
+            <option value="__custom">Custom Criteria</option>
+          </select>
         </label>
+        {!fixedCriteriaSelected && (
+          <label>
+            Custom Criteria Name
+            <input
+              value={form.player_criteria}
+              onChange={(e) => setForm({ ...form, player_criteria: titleCase(e.target.value) })}
+              placeholder="Example: Super Gold Player"
+            />
+          </label>
+        )}
         <label>
           T-Shirt Size
           <select value={form.tshirt_size} onChange={(e) => setForm({ ...form, tshirt_size: e.target.value })}>
@@ -3729,16 +5562,18 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
           <FileImage size={20} />
           <h2>Payment Files</h2>
         </div>
-        <label>
-          Paid Amount
-          <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} />
-        </label>
         <label className="file-button wide">
           <Upload size={18} />
           Payment Screenshot
           <input type="file" accept="image/*" onChange={(e) => updatePaymentFile(e.target.files?.[0] || null)} />
         </label>
         <FilePreview title="Payment Screenshot" file={paymentFile} preview={paymentPreview} existing={form.payment_screenshot_url} />
+        {showPaidAmountField && (
+          <label>
+            Paid Amount
+            <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} />
+          </label>
+        )}
         <label className="file-button wide">
           <Upload size={18} />
           Aadhaar Card
@@ -4435,7 +6270,7 @@ function PlayerDashboard({ player, teams, settings, logs, logout }) {
   const assignedTeam = teams.find((team) => team.id === player.assigned_team_id);
 
   return (
-    <div className="stack">
+    <div className="stack player-dashboard">
       <header className="page-header">
         <div>
           <p className="eyebrow">Player Dashboard</p>
@@ -4468,10 +6303,12 @@ function PlayerDashboard({ player, teams, settings, logs, logout }) {
 function TeamOwnerDashboard({
   ownerTeam,
   settings,
+  teams = [],
   players,
   logs,
   currentPlayer,
   highestTeam,
+  ownerPasses = [],
   selectedTournamentId,
   ownerSession,
   setOwnerSession,
@@ -4490,6 +6327,7 @@ function TeamOwnerDashboard({
   const currentPrice = Math.max(toNumber(settings.current_bid_amount), toNumber(currentPlayer?.base_price));
   const hasHighestBid = Boolean(settings.current_highest_team_id);
   const isHighest = settings.current_highest_team_id === teamId;
+  const hasPassed = ownerPasses.some((pass) => pass.team_id === teamId);
 
   useEffect(() => {
     if (!currentPlayer) {
@@ -4509,7 +6347,7 @@ function TeamOwnerDashboard({
       remaining_budget: ownerRemaining,
       current_player_count: ownerPlayerCount
     };
-    localStorage.setItem('cpl-owner-session', JSON.stringify(freshTeam));
+    sessionStorage.setItem('cpl-owner-session', JSON.stringify(freshTeam));
     setOwnerSession(freshTeam);
   }, [teamId, ownerRemaining, ownerPlayerCount]);
 
@@ -4547,6 +6385,25 @@ function TeamOwnerDashboard({
     setMessage(`${team.team_name} ka bid ${formatMoney(amount, settings.currency_mode)} place ho gaya.`);
   }
 
+  async function passOwnerBid() {
+    if (!currentPlayer) return setMessage('Abhi koi player live auction me nahi hai.');
+    if (!teamId) return setMessage('Owner team session missing hai. Logout karke dobara login karo.');
+    if (isHighest) return setMessage('Aap highest bidder ho, pass allowed nahi hai.');
+    const { data, error } = await supabase.rpc('team_owner_pass_bid', {
+      selected_tournament_id: selectedTournamentId,
+      owner_team_id: teamId,
+      phone: ownerSession.owner_mobile,
+      pin: ownerSession.owner_pin || '',
+      selected_player_id: currentPlayer.id
+    });
+    if (error) {
+      setMessage(`Pass save nahi hua. Supabase SQL Editor me database/add-owner-pass-bidding.sql run karo. Detail: ${error.message}`);
+      return;
+    }
+    await loadAll?.();
+    setMessage(data?.[0]?.player_unsold ? `${currentPlayer.full_name} unsold ho gaya.` : `${team.team_name} pass ho gaya.`);
+  }
+
   return (
     <div className="stack">
       <header className="page-header">
@@ -4554,9 +6411,6 @@ function TeamOwnerDashboard({
           <p className="eyebrow">Team Owner Room</p>
           <h1>{team?.team_name || 'Owner Bidding'}</h1>
         </div>
-        <button className="ghost-button inline" onClick={logout}>
-          <LogOut size={17} /> Logout
-        </button>
       </header>
 
       <div className="auction-layout">
@@ -4598,7 +6452,12 @@ function TeamOwnerDashboard({
               <WalletCards size={20} />
               {isHighest ? 'Already Highest' : 'Place Bid'}
             </button>
+            <button type="button" className="danger-button owner-place-bid" onClick={passOwnerBid} disabled={!currentPlayer || isHighest || hasPassed}>
+              <X size={20} />
+              {hasPassed ? 'Passed' : 'Pass'}
+            </button>
           </form>
+          <p className="pass-note">{ownerPasses.length}/{teams.length} teams pass</p>
         </section>
 
         <section className="panel table-panel owner-team-panel">
@@ -4635,6 +6494,9 @@ function TeamOwnerDashboard({
           </div>
         </section>
       </div>
+      <button className="ghost-button owner-bottom-logout" onClick={logout}>
+        <LogOut size={17} /> Logout
+      </button>
     </div>
   );
 }
@@ -4873,19 +6735,62 @@ function AuctionHistoryReport({ tournament, teams, players, settings }) {
   );
 }
 
-function TeamTable({ teams, players = [], settings, compact = false, onEdit, onDelete }) {
+function TeamTable({ teams, players = [], settings, compact = false, onEdit, onDelete, onBulkDelete }) {
   const hasActions = Boolean(onEdit || onDelete);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const selectedCount = selectedIds.size;
+  const allSelected = teams.length > 0 && teams.every((team) => selectedIds.has(team.id));
+
+  function toggleSelected(teamId) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(teamId)) next.delete(teamId);
+      else next.add(teamId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allSelected) teams.forEach((team) => next.delete(team.id));
+      else teams.forEach((team) => next.add(team.id));
+      return next;
+    });
+  }
+
+  async function deleteSelected() {
+    if (!onBulkDelete) return;
+    const selectedTeams = teams.filter((team) => selectedIds.has(team.id));
+    const deleted = await onBulkDelete(selectedTeams);
+    if (deleted) setSelectedIds(new Set());
+  }
 
   return (
     <section className="panel table-panel">
-      <div className="section-title">
-        <Trophy size={20} />
-        <h2>{hasActions ? 'Teams' : 'Team Standings'}</h2>
+      <div className="table-topbar">
+        <div className="section-title">
+          <Trophy size={20} />
+          <h2>{hasActions ? 'Teams' : 'Team Standings'}</h2>
+        </div>
+        {hasActions && (
+          <div className="table-tools">
+            <label className="checkbox-line">
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+              Select All
+            </label>
+            <span className="summary-pill">{selectedCount} Selected</span>
+            <button type="button" className="danger-button small" onClick={deleteSelected} disabled={!selectedCount}>
+              <Trash2 size={15} /> Delete Selected
+            </button>
+          </div>
+        )}
       </div>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              {hasActions && <th>Select</th>}
               <th>Team</th>
               {!compact && <th>Owner</th>}
               {!compact && <th>Owner Login</th>}
@@ -4900,6 +6805,11 @@ function TeamTable({ teams, players = [], settings, compact = false, onEdit, onD
               const rosterCount = calculatedTeamPlayerCount(team, players);
               return (
                 <tr key={team.id}>
+                  {hasActions && (
+                    <td>
+                      <input type="checkbox" checked={selectedIds.has(team.id)} onChange={() => toggleSelected(team.id)} />
+                    </td>
+                  )}
                   <td>{team.team_name}</td>
                   {!compact && <td>{team.owner_name}</td>}
                   {!compact && <td>{team.owner_mobile || 'Not set'}</td>}
@@ -4926,7 +6836,7 @@ function TeamTable({ teams, players = [], settings, compact = false, onEdit, onD
             })}
             {!teams.length && (
               <tr>
-                <td colSpan={(compact ? 3 : 5) + (hasActions ? 1 : 0)}>No teams added yet.</td>
+                <td colSpan={(compact ? 3 : 5) + (hasActions ? 2 : 0)}>No teams added yet.</td>
               </tr>
             )}
           </tbody>
@@ -4936,7 +6846,7 @@ function TeamTable({ teams, players = [], settings, compact = false, onEdit, onD
   );
 }
 
-function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete, setMessage }) {
+function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete, setMessage, onMessageMarked }) {
   const hasActions = Boolean(onEdit || onDelete);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -5002,6 +6912,56 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
     }
   }
 
+  async function sendWhatsappMessage(player, type) {
+    if (!setMessage) return;
+    const phone = whatsappPhoneNumber(player.mobile_number);
+    if (!phone || phone.length < 11) {
+      setMessage('Player ka valid WhatsApp mobile number nahi hai.');
+      return;
+    }
+    if (type === 'paid' && playerDueAmount(player) > 0) {
+      setMessage('Abhi balance amount baki hai. Balance WhatsApp button use karo.');
+      return;
+    }
+    if (type === 'due' && playerDueAmount(player) <= 0) {
+      setMessage('Is player ka due amount nahi hai.');
+      return;
+    }
+
+    const message = playerWhatsappMessage(player, type, settings);
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+      setMessage('WhatsApp popup blocked hai. Browser me popup allow karo.');
+      return;
+    }
+
+    const confirmed = window.confirm('WhatsApp message send ho gaya? Yes karne par green tick save hoga.');
+    if (!confirmed) {
+      setMessage('WhatsApp tick save nahi hua.');
+      return;
+    }
+
+    const stats = parseStats(player.stats);
+    const whatsappMessages = {
+      ...(stats.whatsapp_messages || {}),
+      [type]: true,
+      [`${type}_at`]: new Date().toISOString()
+    };
+    const { error } = await supabase
+      .from('players')
+      .update({ stats: { ...stats, whatsapp_messages: whatsappMessages } })
+      .eq('id', player.id);
+
+    if (error) {
+      setMessage(formatSaveError(error));
+      return;
+    }
+
+    await onMessageMarked?.();
+    setMessage('WhatsApp message tick save ho gaya.');
+  }
+
   return (
     <section className="panel table-panel">
       <div className="table-topbar">
@@ -5053,6 +7013,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
               <th>T-Shirt</th>
               <th>Base</th>
               <th>Paid</th>
+              <th>WA</th>
               <th>Files</th>
               <th>Status</th>
               <th>Team</th>
@@ -5065,6 +7026,8 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
               const tshirtSize = playerMeta(player, 'tshirt_size');
               const tshirtNumber = playerMeta(player, 'tshirt_number');
               const paidAmount = playerMeta(player, 'paid_amount');
+              const sentMap = whatsappSentMap(player);
+              const dueAmount = playerDueAmount(player);
               return (
                 <tr key={player.id}>
                   {hasActions && (
@@ -5073,13 +7036,40 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
                     </td>
                   )}
                   <td>{player.full_name}</td>
-                  <td><PlayerPhoto player={player} size="sm" /></td>
+                  <td><PlayerPhoto player={player} size="table" /></td>
                   <td>{player.mobile_number}</td>
                   <td>{player.category || '-'}</td>
                   <td>{playerCriteria(player) || '-'}</td>
                   <td>{[tshirtSize, tshirtNumber && `#${tshirtNumber}`].filter(Boolean).join(' ') || '-'}</td>
                   <td>{formatMoney(player.base_price, settings.currency_mode)}</td>
                   <td>{paidAmount !== '' ? formatMoney(paidAmount, settings.currency_mode) : '-'}</td>
+                  <td>
+                    <div className="whatsapp-actions" aria-label={`${player.full_name} WhatsApp actions`}>
+                      <WhatsAppActionButton
+                        title="Registration WhatsApp"
+                        sent={sentMap.registration}
+                        onClick={() => sendWhatsappMessage(player, 'registration')}
+                      >
+                        <UserPlus size={15} />
+                      </WhatsAppActionButton>
+                      <WhatsAppActionButton
+                        title="Payment Received WhatsApp"
+                        sent={sentMap.paid}
+                        disabled={playerRequiredAmount(player) <= 0 || dueAmount > 0}
+                        onClick={() => sendWhatsappMessage(player, 'paid')}
+                      >
+                        <CheckCircle2 size={15} />
+                      </WhatsAppActionButton>
+                      <WhatsAppActionButton
+                        title={dueAmount > 0 ? `Balance WhatsApp: ${formatMoney(dueAmount, settings.currency_mode)}` : 'No balance amount'}
+                        sent={sentMap.due}
+                        disabled={dueAmount <= 0}
+                        onClick={() => sendWhatsappMessage(player, 'due')}
+                      >
+                        <BadgeIndianRupee size={15} />
+                      </WhatsAppActionButton>
+                    </div>
+                  </td>
                   <td>
                     <div className="mini-actions">
                       <DataFileButton url={playerMeta(player, 'payment_screenshot_url')} label="Payment" />
@@ -5109,13 +7099,29 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
             })}
             {!filteredPlayers.length && (
               <tr>
-                <td colSpan={hasActions ? 13 : 11}>No players found.</td>
+                <td colSpan={hasActions ? 14 : 12}>No players found.</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
     </section>
+  );
+}
+
+function WhatsAppActionButton({ title, sent, disabled, onClick, children }) {
+  return (
+    <button
+      type="button"
+      className={classNames('whatsapp-msg-button', sent && 'sent')}
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+      {sent && <span className="sent-check">✓</span>}
+    </button>
   );
 }
 

@@ -6,11 +6,15 @@ create table if not exists public.tournaments (
   name text not null,
   start_date date,
   end_date date,
+  auction_end_date date,
   address text,
   logo_url text,
   description text,
   created_at timestamptz not null default now()
 );
+
+alter table public.tournaments
+add column if not exists auction_end_date date;
 
 insert into public.tournaments (name)
 select 'CPL Tournament'
@@ -67,7 +71,7 @@ end $$;
 
 create table if not exists public.tournament_settings (
   tournament_id bigint primary key references public.tournaments(id) on delete cascade,
-  team_count integer not null default 8 check (team_count in (2, 4, 8, 10, 12, 14, 16)),
+  team_count integer not null default 8 check (team_count > 0 and team_count <= 64),
   currency_mode text not null default 'Points' check (currency_mode in ('Points', 'INR')),
   current_player_id bigint references public.players(id) on delete set null,
   current_bid_amount numeric(12, 2) not null default 0,
