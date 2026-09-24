@@ -15,6 +15,7 @@ create table if not exists public.tournaments (
   name text not null,
   start_date date,
   end_date date,
+  registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0),
   address text,
   logo_url text,
   description text,

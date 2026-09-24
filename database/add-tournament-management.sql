@@ -7,6 +7,7 @@ create table if not exists public.tournaments (
   start_date date,
   end_date date,
   auction_end_date date,
+  registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0),
   address text,
   logo_url text,
   description text,
@@ -15,6 +16,9 @@ create table if not exists public.tournaments (
 
 alter table public.tournaments
 add column if not exists auction_end_date date;
+
+alter table public.tournaments
+add column if not exists registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0);
 
 insert into public.tournaments (name)
 select 'CPL Tournament'

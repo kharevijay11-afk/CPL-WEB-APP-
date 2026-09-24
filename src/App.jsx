@@ -64,6 +64,7 @@ const blankPlayer = {
   player_criteria: defaultPlayerCriteria,
   tshirt_size: 'M',
   tshirt_number: '',
+  registration_amount: '',
   paid_amount: '',
   payment_screenshot_url: '',
   aadhaar_card_url: '',
@@ -78,6 +79,7 @@ const blankTournament = {
   start_date: '',
   end_date: '',
   auction_end_date: '',
+  registration_amount: '1000',
   address: '',
   logo_url: '',
   description: ''
@@ -91,16 +93,16 @@ const defaultWebsiteContent = {
   popup: {
     enabled: false,
     title: 'Registration Open',
-    message: 'New player registration is open for the upcoming CPL auction.',
+    message: 'New player registration is open for the upcoming PSA auction.',
     button_label: 'Register Now'
   },
   about: {
-    eyebrow: 'About CPL',
+    eyebrow: 'About PSA',
     title: 'Professional auction management for cricket tournaments',
-    body: 'CPL Auction System tournament organisers, team owners, players aur audience ke liye ek connected platform hai. Admin panel se teams, players, registration files, bidding, sold price aur standings manage hote hain.'
+    body: 'PSA Auction System tournament organisers, team owners, players aur audience ke liye ek connected platform hai. Admin panel se teams, players, registration files, bidding, sold price aur standings manage hote hain.'
   },
   contact: {
-    title: 'CPL Auction Desk',
+    title: 'PAS Auction Desk',
     address: '',
     phone_1: '',
     phone_2: '',
@@ -273,10 +275,15 @@ function tournamentToForm(tournament) {
     start_date: tournament?.start_date || '',
     end_date: tournament?.end_date || '',
     auction_end_date: tournament?.auction_end_date || '',
+    registration_amount: String(tournament?.registration_amount ?? '1000'),
     address: tournament?.address || '',
     logo_url: tournament?.logo_url || '',
     description: tournament?.description || ''
   };
+}
+
+function tournamentRegistrationAmount(tournament) {
+  return Math.max(0, toNumber(tournament?.registration_amount, 1000));
 }
 
 function teamToForm(team) {
@@ -304,6 +311,7 @@ function playerToForm(player) {
     player_criteria: player?.player_criteria || stats.player_criteria || defaultPlayerCriteria,
     tshirt_size: player?.tshirt_size || stats.tshirt_size || 'M',
     tshirt_number: player?.tshirt_number || stats.tshirt_number || '',
+    registration_amount: String(player?.registration_amount ?? stats.registration_amount ?? ''),
     paid_amount: String(player?.paid_amount ?? stats.paid_amount ?? ''),
     payment_screenshot_url: player?.payment_screenshot_url || stats.payment_screenshot_url || '',
     aadhaar_card_url: player?.aadhaar_card_url || stats.aadhaar_card_url || '',
@@ -439,8 +447,8 @@ function PlayerPhoto({ player, size = 'md' }) {
 
 function BrandMonogram({ compact = false }) {
   return (
-    <span className={classNames('brand-monogram', compact && 'compact')} aria-label="CPL logo">
-      <span>CPL</span>
+    <span className={classNames('brand-monogram', compact && 'compact')} aria-label="PAS logo">
+      <span>PAS</span>
     </span>
   );
 }
@@ -660,6 +668,17 @@ function formatSaveError(error) {
   return friendlyUploadError(parts.join(' | '));
 }
 
+function formatTournamentSaveError(error) {
+  const message = [error?.message, error?.details, error?.hint, error?.code].filter(Boolean).join(' | ');
+  if (message.includes('registration_amount')) {
+    return `Player Registration Amount column missing hai. Supabase SQL Editor me database/add-registration-amount.sql run karo. Detail: ${message}`;
+  }
+  if (message.includes('auction_end_date')) {
+    return `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${message}`;
+  }
+  return formatSaveError(error);
+}
+
 async function readGatePassword(configKey, fallbackPassword) {
   try {
     const { data, error } = await supabase
@@ -769,7 +788,7 @@ function playerPaidAmount(player) {
 }
 
 function playerRequiredAmount(player) {
-  return Math.max(0, toNumber(player?.base_price));
+  return Math.max(0, toNumber(playerMeta(player, 'registration_amount')));
 }
 
 function playerDueAmount(player) {
@@ -1657,7 +1676,7 @@ function PublicWebsite({
   const heroSlides = galleryItems.length
     ? galleryItems.filter((item) => item.image_url).map((item) => ({
       image_url: item.image_url,
-      title: item.title || 'CPL Gallery',
+      title: item.title || 'PSA Gallery',
       caption: item.caption || 'Tournament moment'
     }))
     : featuredPlayers.map((player) => ({
@@ -1823,6 +1842,23 @@ function PublicWebsite({
       : `Auction registration closed${tournament?.auction_end_date ? ` on ${formatDate(tournament.auction_end_date)}` : ''}.`);
   }
 
+  function openRegistration(event) {
+    event.preventDefault();
+    if (registrationLocked) {
+      blockClosedRegistration(event);
+      return;
+    }
+    setPopupClosed(true);
+    setRegistrationFocused(true);
+    setActiveHash('registration');
+    if (window.location.hash !== '#registration') {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#registration`);
+    }
+    window.setTimeout(() => {
+      document.getElementById('registration')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }, 0);
+  }
+
   return (
     <div
       className={classNames(
@@ -1839,7 +1875,7 @@ function PublicWebsite({
       onDragStart={(event) => event.preventDefault()}
     >
       {demoMode && <div className="demo-banner">DEMO VERSION - Read only preview, data save disabled</div>}
-      <div className="public-protection-watermark" aria-hidden="true">CPL Auction Software</div>
+      <div className="public-protection-watermark" aria-hidden="true">PAS Auction Software</div>
       {content.popup.enabled && !popupClosed && (
         <div className="site-popup" role="dialog" aria-modal="true">
           <div className="site-popup-card">
@@ -1852,7 +1888,7 @@ function PublicWebsite({
                 <UserPlus size={18} /> {disableRegistration ? 'Demo Locked' : 'Registration Closed'}
               </button>
             ) : (
-              <a className="primary-button inline" href="#registration" onClick={() => setPopupClosed(true)}>
+              <a className="primary-button inline" href="#registration" onClick={openRegistration}>
                 <UserPlus size={18} /> {content.popup.button_label || 'Register Now'}
               </a>
             )}
@@ -1903,7 +1939,7 @@ function PublicWebsite({
               <Trophy size={18} /> Live Auction
             </div>
             <p className="eyebrow">{content.hero.eyebrow}</p>
-            <h1>{content.hero.title || tournament?.name || 'CPL Player Auction'}</h1>
+            <h1>{content.hero.title || tournament?.name || 'PSA Player Auction'}</h1>
             <p className="hero-lead">
               {content.hero.lead}
             </p>
@@ -1913,6 +1949,15 @@ function PublicWebsite({
             </div>
             <div className="hero-cta-row">
               <a className="hero-button read-more" href="#about">Read More</a>
+              {registrationLocked ? (
+                <button className="hero-button register-now" type="button" onClick={blockClosedRegistration}>
+                  {disableRegistration ? 'Demo Locked' : 'Registration Closed'}
+                </button>
+              ) : (
+                <a className="hero-button register-now" href="#registration" onClick={openRegistration}>
+                  {content.popup.button_label || 'Register Now'}
+                </a>
+              )}
             </div>
             <div className="hero-stats">
               <Metric label="Teams" value={displayTeamCount} />
@@ -1941,11 +1986,22 @@ function PublicWebsite({
                 <div className="home-team-roster">
                   <h3>{selectedPublicTeam.team_name} Sold Players</h3>
                   {selectedPublicRoster.length ? (
-                    selectedPublicRoster.map((player) => (
-                      <span key={player.id}>
-                        {player.full_name} - {formatMoney(soldPlayerPrice(player), settings.currency_mode)}
-                      </span>
-                    ))
+                    <div className="home-team-roster-table" role="table" aria-label={`${selectedPublicTeam.team_name} sold players`}>
+                      <div className="home-team-roster-row header" role="row">
+                        <span role="columnheader">S.N.</span>
+                        <span role="columnheader">Name</span>
+                        <span role="columnheader">Category</span>
+                        <span role="columnheader">Criteria</span>
+                      </div>
+                      {selectedPublicRoster.map((player, index) => (
+                        <div className="home-team-roster-row" role="row" key={player.id}>
+                          <span role="cell">{index + 1}</span>
+                          <span role="cell">{player.full_name} - {formatMoney(soldPlayerPrice(player), settings.currency_mode)}</span>
+                          <span role="cell">{player.category || '-'}</span>
+                          <span role="cell">{playerCriteria(player) || '-'}</span>
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <small>Is team me abhi koi sold player nahi hai.</small>
                   )}
@@ -2098,18 +2154,18 @@ function PublicWebsite({
                   key={`${item.name}-${index}-${position}`}
                 >
                   {item.image_url ? (
-                    <img className="testimonial-photo" src={item.image_url} alt={`${item.name || 'CPL'} testimonial`} />
+                    <img className="testimonial-photo" src={item.image_url} alt={`${item.name || 'PSA'} testimonial`} />
                   ) : (
                     <span className="testimonial-photo fallback">{item.name?.[0] || 'C'}</span>
                   )}
-                  <strong>{item.name || 'CPL Member'}</strong>
+                  <strong>{item.name || 'PSA Member'}</strong>
                   <p>{item.text || 'Great auction experience.'}</p>
                 </article>
               ))}
               {!visibleTestimonials.length && (
                 <article className="testimonial-modern-card active center">
                   <span className="testimonial-photo fallback">C</span>
-                  <strong>CPL Member</strong>
+                  <strong>PSA Member</strong>
                   <p>Great auction experience.</p>
                 </article>
               )}
@@ -2140,7 +2196,7 @@ function PublicWebsite({
           </div>
           <div className="contact-card">
             <MapPin size={22} />
-            <strong>{content.contact.title || 'CPL Auction Desk'}</strong>
+            <strong>{content.contact.title || 'PAS Auction Desk'}</strong>
             <span>{content.contact.address || tournament?.address || 'Venue details pending'}</span>
             <span><Phone size={16} /> {content.contact.phone_1 || 'Contact number can be added by organiser'}</span>
             {content.contact.phone_2 && <span><Phone size={16} /> {content.contact.phone_2}</span>}
@@ -2176,7 +2232,7 @@ function PublicWebsite({
                 <p><Mail size={17} /> <span>{content.contact.email || 'Official updates through admin panel'}</span></p>
               </div>
               <div className="footer-socials" aria-label="Social links">
-                <a href="#home" aria-label="CPL social">C</a>
+                <a href="#home" aria-label="PSA social">P</a>
                 <a href="#photos" aria-label="Gallery social">G</a>
                 {content.popup.enabled && !registrationLocked && <a href="#registration" aria-label="Registration social">R</a>}
                 <a href="#contact" aria-label="Contact social">@</a>
@@ -2185,8 +2241,8 @@ function PublicWebsite({
 
             <section>
               <h3>Auction Application</h3>
-              <p className="footer-app-copy">Live auction, player registration, team purse, and projector display are available in this CPL system.</p>
-              {content.popup.enabled && !registrationLocked && <a className="footer-app-badge" href="#registration">Open CPL Auction</a>}
+              <p className="footer-app-copy">Live auction, player registration, team purse, and projector display are available in this PSA system.</p>
+              {content.popup.enabled && !registrationLocked && <a className="footer-app-badge" href="#registration">Open PAS Auction</a>}
               <div className="visitor-count">
                 <strong>Visitor Count .</strong>
                 <span>{visitorCount.map((digit, index) => <b key={`${digit}-${index}`}>{digit}</b>)}</span>
@@ -2735,6 +2791,8 @@ function PlayerRegistration({
   const [barcodePreview, setBarcodePreview] = useState(paymentQrUrl || '');
   const [photoCrop, setPhotoCrop] = useState(defaultPassportCrop);
   const [busy, setBusy] = useState(false);
+  const registrationAmount = tournamentRegistrationAmount(tournament);
+  const showPaidAmountField = Boolean(paymentFile);
 
   useEffect(() => {
     setBarcodePreview(paymentQrUrl || '');
@@ -2766,6 +2824,9 @@ function PlayerRegistration({
 
     const mobile = digitsOnly(form.mobile_number);
     if (mobile.length !== 10) return setMessage('Mobile number must be 10 digits.');
+    if (showPaidAmountField && toNumber(form.paid_amount) <= 0) {
+      return setMessage('Payment screenshot upload ke baad paid amount enter karo.');
+    }
 
     setBusy(true);
     setMessage('Player save ho raha hai, please wait...');
@@ -2786,7 +2847,8 @@ function PlayerRegistration({
           player_criteria: defaultPlayerCriteria,
           tshirt_size: form.tshirt_size,
           tshirt_number: numericText(form.tshirt_number) || null,
-          paid_amount: toNumber(form.paid_amount),
+          registration_amount: registrationAmount,
+          paid_amount: showPaidAmountField ? toNumber(form.paid_amount) : 0,
           payment_screenshot_url: paymentData,
           aadhaar_card_url: aadhaarData
         }
@@ -2875,21 +2937,19 @@ function PlayerRegistration({
             <FileImage size={20} />
             <h2>Payment Details</h2>
           </div>
-          {barcodePreview && (
-            <div className="payment-qr-box">
-              <img src={barcodePreview} alt="Payment barcode preview" />
-            </div>
-          )}
-          <label>
-            Paid Amount
-            <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} required />
-          </label>
+          <span className="summary-pill inline-summary">Registration Amount: {formatMoney(registrationAmount, 'INR')}</span>
           <label className="file-button wide">
             <Upload size={18} />
             Payment Screenshot (Optional)
             <input type="file" accept="image/*" onChange={(e) => updatePaymentFile(e.target.files?.[0] || null)} disabled={busy} />
           </label>
           <FilePreview title="Payment Screenshot" file={paymentFile} preview={paymentPreview} optional />
+          {showPaidAmountField && (
+            <label>
+              Paid Amount
+              <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} required />
+            </label>
+          )}
           <label className="file-button wide">
             <Upload size={18} />
             Aadhaar Card (Optional)
@@ -2900,6 +2960,12 @@ function PlayerRegistration({
             <CheckCircle2 size={18} />
             {busy ? 'Saving, please wait...' : 'Save Player'}
           </button>
+          {barcodePreview && (
+            <div className="payment-qr-box compact-payment-qr">
+              <img src={barcodePreview} alt="Payment barcode preview" />
+              <strong>Please scan barcode.</strong>
+            </div>
+          )}
         </section>
       </form>
 
@@ -3121,6 +3187,7 @@ function AdminDashboard({
       {tab === 'teams' && selectedTournamentId && <TeamsAdmin teams={teams} players={players} settings={settings} selectedTournamentId={selectedTournamentId} setMessage={setMessage} />}
       {tab === 'players' && selectedTournamentId && (
         <PlayersAdmin
+          tournament={tournament}
           players={players}
           teams={teams}
           settings={settings}
@@ -3205,6 +3272,17 @@ function WebsiteControlAdmin({ websiteContent, tournament, selectedTournamentId,
     }
   }
 
+  async function updatePaymentQrImage(file) {
+    if (!file) return;
+    try {
+      const imageUrl = await imageFileToCompressedDataUrl(file, 420, 420, 0.82);
+      setForm((current) => ({ ...current, payment_qr_url: imageUrl }));
+      setMessage('Payment barcode selected.');
+    } catch (error) {
+      setMessage(formatSaveError(error));
+    }
+  }
+
   async function saveWebsiteContent(event) {
     event.preventDefault();
     setBusy(true);
@@ -3250,7 +3328,7 @@ function WebsiteControlAdmin({ websiteContent, tournament, selectedTournamentId,
           </label>
           <label>
             Hero Main Title
-            <input value={form.hero.title} onChange={(e) => updateSection('hero', 'title', titleCase(e.target.value))} placeholder={tournament?.name || 'CPL Player Auction'} />
+            <input value={form.hero.title} onChange={(e) => updateSection('hero', 'title', titleCase(e.target.value))} placeholder={tournament?.name || 'PSA Player Auction'} />
           </label>
           <label>
             Popup Button Text
@@ -3281,6 +3359,30 @@ function WebsiteControlAdmin({ websiteContent, tournament, selectedTournamentId,
             Popup Message
             <textarea rows="2" value={form.popup.message} onChange={(e) => updateSection('popup', 'message', titleCase(e.target.value))} />
           </label>
+        </div>
+      </section>
+
+      <section className="panel form-panel">
+        <div className="section-title">
+          <BadgeIndianRupee size={20} />
+          <h2>Payment Barcode</h2>
+        </div>
+        <div className="payment-barcode-admin">
+          {form.payment_qr_url ? (
+            <img src={form.payment_qr_url} alt="Payment barcode preview" />
+          ) : (
+            <span className="payment-barcode-empty"><FileImage size={34} /></span>
+          )}
+          <label className="file-button wide">
+            <Upload size={17} />
+            Upload Barcode Photo
+            <input type="file" accept="image/*" onChange={(e) => updatePaymentQrImage(e.target.files?.[0])} />
+          </label>
+          {form.payment_qr_url && (
+            <button type="button" className="ghost-button inline" onClick={() => setForm((current) => ({ ...current, payment_qr_url: '' }))}>
+              Remove Barcode
+            </button>
+          )}
         </div>
       </section>
 
@@ -3451,6 +3553,8 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
   async function submitTournament(event) {
     event.preventDefault();
     if (!form.name.trim()) return setMessage('Tournament name is required.');
+    const registrationAmount = toNumber(form.registration_amount);
+    if (registrationAmount <= 0) return setMessage('Player registration amount 0 se jyada hona chahiye.');
 
     setBusy(true);
     if (editingTournamentId) {
@@ -3461,6 +3565,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
           start_date: form.start_date || null,
           end_date: form.end_date || null,
           auction_end_date: form.auction_end_date || null,
+          registration_amount: registrationAmount,
           address: form.address.trim() || null,
           logo_url: form.logo_url.trim() || null,
           description: form.description.trim() || null
@@ -3468,9 +3573,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         .eq('id', editingTournamentId);
       setBusy(false);
 
-      if (error) return setMessage(error.message.includes('auction_end_date')
-        ? `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${error.message}`
-        : error.message);
+      if (error) return setMessage(formatTournamentSaveError(error));
       selectTournament(editingTournamentId);
       await loadTournamentsAndCurrentData();
       setMessage('Tournament details updated.');
@@ -3484,6 +3587,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         start_date: form.start_date || null,
         end_date: form.end_date || null,
         auction_end_date: form.auction_end_date || null,
+        registration_amount: registrationAmount,
         address: form.address.trim() || null,
         logo_url: form.logo_url.trim() || null,
         description: form.description.trim() || null
@@ -3492,9 +3596,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
       .single();
     setBusy(false);
 
-    if (error) return setMessage(error.message.includes('auction_end_date')
-      ? `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${error.message}`
-      : error.message);
+    if (error) return setMessage(formatTournamentSaveError(error));
     await supabase.from('tournament_settings').upsert({ tournament_id: data.id });
     setEditingTournamentId(data.id);
     selectTournament(data.id);
@@ -3575,6 +3677,10 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
               <input type="date" value={form.auction_end_date} onChange={(e) => setForm({ ...form, auction_end_date: e.target.value })} />
             </label>
             <label>
+              Player Registration Amount
+              <input inputMode="numeric" value={form.registration_amount} onChange={(e) => setForm({ ...form, registration_amount: numericText(e.target.value) })} required />
+            </label>
+            <label>
               Logo Upload
               <span className="logo-upload-row">
                 {form.logo_url ? <img src={form.logo_url} alt="Tournament logo preview" /> : <ImageIcon size={26} />}
@@ -3614,6 +3720,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
           <p className="eyebrow">Selected Tournament</p>
           <h2>{tournament?.name || 'No tournament selected'}</h2>
           <p><CalendarDays size={16} /> {formatDateRange(tournament?.start_date, tournament?.end_date)}</p>
+          <p><BadgeIndianRupee size={16} /> Registration: {formatMoney(tournamentRegistrationAmount(tournament), settings.currency_mode)}</p>
           <p><MapPin size={16} /> {tournament?.address || 'Address not added'}</p>
         </section>
       </div>
@@ -4910,7 +5017,7 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
   );
 }
 
-function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessage, loadAll }) {
+function PlayersAdmin({ tournament, players, teams, settings, selectedTournamentId, setMessage, loadAll }) {
   const [mode, setMode] = useState('table');
   const [editingPlayer, setEditingPlayer] = useState(null);
   const [retainForm, setRetainForm] = useState({ player_id: '', team_id: '', retain_price: '' });
@@ -4951,6 +5058,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
       stats.player_criteria = criteria;
       stats.tshirt_size = form.tshirt_size;
       stats.tshirt_number = numericText(form.tshirt_number) || null;
+      stats.registration_amount = toNumber(form.registration_amount);
       stats.paid_amount = toNumber(form.paid_amount);
       stats.payment_screenshot_url = paymentData || '';
       stats.aadhaar_card_url = aadhaarData || '';
@@ -5115,9 +5223,9 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
 
   function downloadTemplate() {
     const template = [
-      ['full_name', 'mobile_number', 'photo_url', 'base_price', 'category', 'player_criteria', 'tshirt_size', 'tshirt_number', 'paid_amount', 'payment_screenshot_url', 'aadhaar_card_url', 'stats'],
-      ['Virat Kohli', '9876543210', 'https://example.com/virat.jpg', '5000', 'Batter', 'Gold Player', 'M', '18', '1000', '', '', '{"runs":1200,"strike_rate":142}'],
-      ['Jasprit Bumrah', '9876543211', '', '4500', 'Bowler', 'Icon Player', 'L', '93', '1000', '', '', '{"wickets":32,"economy":6.8}']
+      ['full_name', 'mobile_number', 'photo_url', 'base_price', 'registration_amount', 'category', 'player_criteria', 'tshirt_size', 'tshirt_number', 'paid_amount', 'payment_screenshot_url', 'aadhaar_card_url', 'stats'],
+      ['Virat Kohli', '9876543210', 'https://example.com/virat.jpg', '5000', '1000', 'Batter', 'Gold Player', 'M', '18', '1000', '', '', '{"runs":1200,"strike_rate":142}'],
+      ['Jasprit Bumrah', '9876543211', '', '4500', '1000', 'Bowler', 'Icon Player', 'L', '93', '1000', '', '', '{"wickets":32,"economy":6.8}']
     ]
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(','))
       .join('\n');
@@ -5131,7 +5239,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
   }
 
   function downloadBlankTemplate() {
-    const headers = ['full_name', 'mobile_number', 'photo_url', 'base_price', 'category', 'player_criteria', 'tshirt_size', 'tshirt_number', 'paid_amount', 'payment_screenshot_url', 'aadhaar_card_url', 'stats'];
+    const headers = ['full_name', 'mobile_number', 'photo_url', 'base_price', 'registration_amount', 'category', 'player_criteria', 'tshirt_size', 'tshirt_number', 'paid_amount', 'payment_screenshot_url', 'aadhaar_card_url', 'stats'];
     const rows = Array.from({ length: 40 }, () => headers.map(() => ''));
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(','))
@@ -5153,6 +5261,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
       'category',
       'player_criteria',
       'base_price',
+      'registration_amount',
       'paid_amount',
       'sold_status',
       'final_bid_price',
@@ -5166,6 +5275,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
       player.category || '',
       playerCriteria(player),
       player.base_price || 0,
+      playerMeta(player, 'registration_amount') || 0,
       playerMeta(player, 'paid_amount') || 0,
       player.sold_status || '',
       player.final_bid_price || '',
@@ -5195,6 +5305,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
       'T-Shirt Size',
       'T-Shirt No',
       'Base Price',
+      'Registration Amount',
       'Paid Amount',
       'Payment Screenshot',
       'Aadhaar Card',
@@ -5238,7 +5349,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
           <div class="header">
             <div>
               <h1>${tournament?.name || 'CPL'} - Blank Player Registration List</h1>
-              <p>Use this paper list for team/player data collection. Digital upload headers are: full_name, mobile_number, photo_url, base_price, category, player_criteria, tshirt_size, tshirt_number, paid_amount, payment_screenshot_url, aadhaar_card_url, stats.</p>
+              <p>Use this paper list for team/player data collection. Digital upload headers are: full_name, mobile_number, photo_url, base_price, registration_amount, category, player_criteria, tshirt_size, tshirt_number, paid_amount, payment_screenshot_url, aadhaar_card_url, stats.</p>
             </div>
             <p>Date: ____________</p>
           </div>
@@ -5278,6 +5389,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
           const criteria = titleCase(String(pickField(row, ['player_criteria', 'criteria', 'grade', 'player_grade'])).trim()) || defaultPlayerCriteria;
           const tshirtSize = String(pickField(row, ['tshirt_size', 't_shirt_size', 'shirt_size'])).trim().toUpperCase();
           const tshirtNumber = numericText(pickField(row, ['tshirt_number', 't_shirt_number', 'shirt_number', 'tshirt_no', 't_shirt_no']));
+          const registrationAmount = toNumber(pickField(row, ['registration_amount', 'registration_fee', 'player_registration_amount']));
           const paidAmount = toNumber(pickField(row, ['paid_amount', 'paid', 'payment_amount']));
           const paymentUrl = String(pickField(row, ['payment_screenshot_url', 'payment_screenshot', 'payment_file'])).trim();
           const aadhaarUrl = String(pickField(row, ['aadhaar_card_url', 'aadhaar_card', 'adhar_card_url', 'adhar_card'])).trim();
@@ -5285,6 +5397,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
           stats.player_criteria = criteria;
           if (tshirtSizes.includes(tshirtSize)) stats.tshirt_size = tshirtSize;
           if (tshirtNumber) stats.tshirt_number = tshirtNumber;
+          stats.registration_amount = registrationAmount;
           stats.paid_amount = paidAmount;
           if (paymentUrl) stats.payment_screenshot_url = paymentUrl;
           if (aadhaarUrl) stats.aadhaar_card_url = aadhaarUrl;
@@ -5436,6 +5549,7 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
       {mode !== 'table' && (
         <PlayerEditorForm
           player={editingPlayer}
+          tournament={tournament}
           busy={busy}
           onCancel={closeForm}
           onSave={savePlayer}
@@ -5445,8 +5559,14 @@ function PlayersAdmin({ players, teams, settings, selectedTournamentId, setMessa
   );
 }
 
-function PlayerEditorForm({ player, busy, onCancel, onSave }) {
-  const [form, setForm] = useState(playerToForm(player));
+function PlayerEditorForm({ player, tournament, busy, onCancel, onSave }) {
+  const [form, setForm] = useState(() => {
+    const nextForm = playerToForm(player);
+    if (!player && !nextForm.registration_amount) {
+      nextForm.registration_amount = String(tournamentRegistrationAmount(tournament));
+    }
+    return nextForm;
+  });
   const [photoFile, setPhotoFile] = useState(null);
   const [paymentFile, setPaymentFile] = useState(null);
   const [aadhaarFile, setAadhaarFile] = useState(null);
@@ -5455,7 +5575,6 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
   const [aadhaarPreview, setAadhaarPreview] = useState('');
   const [photoCrop, setPhotoCrop] = useState(defaultPassportCrop);
   const fixedCriteriaSelected = playerCriteriaOptions.includes(form.player_criteria);
-  const showPaidAmountField = Boolean(paymentFile || paymentPreview || form.payment_screenshot_url);
 
   function updatePhoto(file) {
     setPhotoFile(file || null);
@@ -5514,6 +5633,10 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
           <input inputMode="numeric" value={form.base_price} onChange={(e) => setForm({ ...form, base_price: numericText(e.target.value) })} required />
         </label>
         <label>
+          Registration Amount
+          <input inputMode="numeric" value={form.registration_amount} onChange={(e) => setForm({ ...form, registration_amount: numericText(e.target.value) })} />
+        </label>
+        <label>
           Category
           <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
             {playerCategories.map((category) => (
@@ -5568,12 +5691,10 @@ function PlayerEditorForm({ player, busy, onCancel, onSave }) {
           <input type="file" accept="image/*" onChange={(e) => updatePaymentFile(e.target.files?.[0] || null)} />
         </label>
         <FilePreview title="Payment Screenshot" file={paymentFile} preview={paymentPreview} existing={form.payment_screenshot_url} />
-        {showPaidAmountField && (
-          <label>
-            Paid Amount
-            <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} />
-          </label>
-        )}
+        <label>
+          Paid Amount
+          <input inputMode="numeric" value={form.paid_amount} onChange={(e) => setForm({ ...form, paid_amount: numericText(e.target.value) })} />
+        </label>
         <label className="file-button wide">
           <Upload size={18} />
           Aadhaar Card
@@ -6856,7 +6977,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
     const query = searchTerm.trim().toLowerCase();
     if (!query) return players;
     return players.filter((player) =>
-      [player.full_name, player.mobile_number, player.category, playerCriteria(player), player.sold_status]
+      [player.full_name, player.mobile_number, player.category, playerCriteria(player)]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query))
     );
@@ -6914,21 +7035,23 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
 
   async function sendWhatsappMessage(player, type) {
     if (!setMessage) return;
+    const dueAmount = playerDueAmount(player);
+    const actualType = type === 'registration' && dueAmount > 0 ? 'due' : type;
     const phone = whatsappPhoneNumber(player.mobile_number);
     if (!phone || phone.length < 11) {
       setMessage('Player ka valid WhatsApp mobile number nahi hai.');
       return;
     }
-    if (type === 'paid' && playerDueAmount(player) > 0) {
+    if (actualType === 'paid' && dueAmount > 0) {
       setMessage('Abhi balance amount baki hai. Balance WhatsApp button use karo.');
       return;
     }
-    if (type === 'due' && playerDueAmount(player) <= 0) {
+    if (actualType === 'due' && dueAmount <= 0) {
       setMessage('Is player ka due amount nahi hai.');
       return;
     }
 
-    const message = playerWhatsappMessage(player, type, settings);
+    const message = playerWhatsappMessage(player, actualType, settings);
     const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
     const opened = window.open(url, '_blank', 'noopener,noreferrer');
     if (!opened) {
@@ -6945,8 +7068,8 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
     const stats = parseStats(player.stats);
     const whatsappMessages = {
       ...(stats.whatsapp_messages || {}),
-      [type]: true,
-      [`${type}_at`]: new Date().toISOString()
+      [actualType]: true,
+      [`${actualType}_at`]: new Date().toISOString()
     };
     const { error } = await supabase
       .from('players')
@@ -6972,10 +7095,6 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
         <div className="table-tools">
           <span className="summary-pill">Total Player: {filteredPlayers.length}</span>
           <span className="summary-pill">Total Paid: {formatMoney(totalPaid, settings.currency_mode)}</span>
-          <label className="search-box">
-            <Search size={17} />
-            <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search player" />
-          </label>
         </div>
       </div>
       {hasActions && (
@@ -6998,6 +7117,18 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
           <button type="button" className="danger-button small" onClick={deleteSelected} disabled={!selectedCount}>
             <Trash2 size={15} /> Delete Selected
           </button>
+          <label className="search-box">
+            <Search size={17} />
+            <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search name, mobile, category, criteria" />
+          </label>
+        </div>
+      )}
+      {!hasActions && (
+        <div className="bulk-bar">
+          <label className="search-box">
+            <Search size={17} />
+            <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search name, mobile, category, criteria" />
+          </label>
         </div>
       )}
       <div className="table-wrap">
@@ -7012,6 +7143,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
               <th>Criteria</th>
               <th>T-Shirt</th>
               <th>Base</th>
+              <th>Reg Amount</th>
               <th>Paid</th>
               <th>WA</th>
               <th>Files</th>
@@ -7025,6 +7157,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
               const team = teams.find((item) => item.id === player.assigned_team_id);
               const tshirtSize = playerMeta(player, 'tshirt_size');
               const tshirtNumber = playerMeta(player, 'tshirt_number');
+              const registrationAmount = playerMeta(player, 'registration_amount');
               const paidAmount = playerMeta(player, 'paid_amount');
               const sentMap = whatsappSentMap(player);
               const dueAmount = playerDueAmount(player);
@@ -7042,6 +7175,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
                   <td>{playerCriteria(player) || '-'}</td>
                   <td>{[tshirtSize, tshirtNumber && `#${tshirtNumber}`].filter(Boolean).join(' ') || '-'}</td>
                   <td>{formatMoney(player.base_price, settings.currency_mode)}</td>
+                  <td>{registrationAmount !== '' ? formatMoney(registrationAmount, 'INR') : '-'}</td>
                   <td>{paidAmount !== '' ? formatMoney(paidAmount, settings.currency_mode) : '-'}</td>
                   <td>
                     <div className="whatsapp-actions" aria-label={`${player.full_name} WhatsApp actions`}>
@@ -7099,7 +7233,7 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
             })}
             {!filteredPlayers.length && (
               <tr>
-                <td colSpan={hasActions ? 14 : 12}>No players found.</td>
+                <td colSpan={hasActions ? 15 : 13}>No players found.</td>
               </tr>
             )}
           </tbody>

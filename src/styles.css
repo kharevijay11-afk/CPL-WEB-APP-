@@ -574,6 +574,7 @@ input[type="range"] {
 .payment-qr-box {
   display: grid;
   place-items: center;
+  gap: 8px;
   padding: 10px;
   border: 1px dashed var(--line-strong);
   border-radius: 8px;
@@ -585,6 +586,45 @@ input[type="range"] {
   aspect-ratio: 1;
   object-fit: contain;
   border-radius: 8px;
+}
+
+.payment-qr-box strong {
+  color: var(--gold);
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.compact-payment-qr {
+  justify-self: center;
+  width: min(160px, 100%);
+  padding: 9px;
+}
+
+.compact-payment-qr img {
+  width: min(118px, 100%);
+}
+
+.inline-summary {
+  width: fit-content;
+}
+
+.payment-barcode-admin {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.payment-barcode-admin img,
+.payment-barcode-empty {
+  display: grid;
+  width: 138px;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  object-fit: contain;
+  color: var(--gold);
 }
 
 label {
@@ -2870,7 +2910,6 @@ td input[type="checkbox"] {
   font-size: 1rem;
 }
 
-.home-team-roster span,
 .home-team-roster small {
   display: block;
   width: fit-content;
@@ -2881,6 +2920,35 @@ td input[type="checkbox"] {
   color: var(--muted);
   background: rgba(255, 255, 255, 0.05);
   font-weight: 800;
+}
+
+.home-team-roster-table {
+  display: grid;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.home-team-roster-row {
+  display: grid;
+  grid-template-columns: 44px minmax(180px, 1.6fr) minmax(110px, 1fr) minmax(120px, 1fr);
+  gap: 6px;
+  min-width: 560px;
+}
+
+.home-team-roster-row span {
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 800;
+}
+
+.home-team-roster-row.header span {
+  border-color: var(--line-strong);
+  color: var(--gold);
+  background: rgba(245, 197, 66, 0.1);
 }
 
 .hero-dots {
