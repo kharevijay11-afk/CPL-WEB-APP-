@@ -608,6 +608,34 @@ async function imageFileToCompressedDataUrl(file, maxWidth = 900, maxHeight = 12
   }
 }
 
+async function imageSourceToCompressedDataUrl(source, maxWidth = 240, maxHeight = 320, quality = 0.58) {
+  if (!source || typeof document === 'undefined') return '';
+
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image could not be loaded.'));
+      img.src = source;
+    });
+
+    const ratio = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+    const width = Math.max(1, Math.round(image.width * ratio));
+    const height = Math.max(1, Math.round(image.height * ratio));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    context.fillStyle = passportBackgroundColor;
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return '';
+  }
+}
+
 async function imageFileToPassportDataUrl(file, crop = defaultPassportCrop) {
   if (!file) return null;
   if (!file.type?.startsWith('image/')) {
@@ -826,7 +854,7 @@ function createDemoData() {
     end_date: '2026-09-30',
     auction_end_date: '2026-09-30',
     address: 'Demo Cricket Ground, Rajnandgaon',
-    description: 'Read-only demo tournament for CPL Auction Software.'
+    description: 'Read-only demo tournament for PAS Auction Software.'
   };
   const demoTeams = [
     { id: 1, team_name: 'VCK Club', owner_name: 'Owner 1', owner_mobile: '9000000001', total_budget: 100000, remaining_budget: 82000, max_players: 16 },
@@ -850,7 +878,7 @@ function createDemoData() {
   const demoWebsiteContent = mergeWebsiteContent({
     hero: {
       eyebrow: 'Demo Version',
-      title: 'CPL Auction Software Demo',
+      title: 'PAS Auction Software Demo',
       lead: 'Public website, match schedule, gallery, projector, and auction screens ka read-only demo.'
     },
     popup: { enabled: false, title: '', message: '', button_label: 'Register Now' },
@@ -1548,7 +1576,7 @@ function Shell({
       <div className="shell-mobile-topbar">
         <div className="brand compact">
           <BrandMonogram compact />
-          <strong>CPL Auction</strong>
+          <strong>PAS Auction</strong>
         </div>
         <button className="mobile-menu-toggle" onClick={() => setMobileMenuOpen((open) => !open)} aria-label="Open menu">
           {mobileMenuOpen ? <X size={26} /> : <Menu size={28} />}
@@ -1558,7 +1586,7 @@ function Shell({
         <div className="brand">
           <BrandMonogram />
           <div>
-            <strong>Cricket Players League</strong>
+            <strong>Players Auction System</strong>
             <small>Live auction control</small>
           </div>
         </div>
@@ -2208,7 +2236,7 @@ function PublicWebsite({
           <a className="whatsapp-float" href={whatsappPhone ? `https://wa.me/${whatsappPhone}` : '#contact'} aria-label="Open WhatsApp">
             WA
           </a>
-          <a className="back-to-top" href="#home" aria-label="Back to top">↑</a>
+          <a className="back-to-top" href="#home" aria-label="Back to top">TOP</a>
         </div>
 
         <footer className="site-footer">
@@ -2216,10 +2244,10 @@ function PublicWebsite({
             <section>
               <h3>Quick Link</h3>
               <nav className="footer-links">
-                <a href="#about"><span>›</span> About Us</a>
-                <a href="#photos"><span>›</span> Gallery</a>
-                <a href="#contact"><span>›</span> Contact Us</a>
-                <button type="button" onClick={() => setView('login')}><span>›</span> Login</button>
+                <a href="#about"><span>&gt;</span> About Us</a>
+                <a href="#photos"><span>&gt;</span> Gallery</a>
+                <a href="#contact"><span>&gt;</span> Contact Us</a>
+                <button type="button" onClick={() => setView('login')}><span>&gt;</span> Login</button>
               </nav>
             </section>
 
@@ -2250,7 +2278,7 @@ function PublicWebsite({
             </section>
           </div>
           <div className="footer-bottom">
-            <span>© 2026 <strong>Create Computer, Rajnandgaon, 7000492856</strong> All Right Reserved.</span>
+            <span>(c) 2026 <strong>Create Computer, Rajnandgaon, 7000492856</strong> All Rights Reserved.</span>
             <div className="footer-developer">
               <span>Developed By</span>
               <div className="footer-developer-brand">
@@ -4459,7 +4487,7 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
         </div>
 
         <div className="pamphlet-footer">
-          <span>Registration and auction managed by CPL Auction Software</span>
+          <span>Registration and auction managed by PAS Auction Software</span>
           <b>{settings.currency_mode} Auction</b>
         </div>
       </section>
@@ -5253,11 +5281,12 @@ function PlayersAdmin({ tournament, players, teams, settings, selectedTournament
     URL.revokeObjectURL(link.href);
   }
 
-  function downloadPlayersList() {
+  async function downloadPlayersList() {
     const teamNameById = teams.reduce((map, team) => ({ ...map, [team.id]: team.team_name }), {});
     const headers = [
       'full_name',
       'mobile_number',
+      'photo_url',
       'category',
       'player_criteria',
       'base_price',
@@ -5267,31 +5296,63 @@ function PlayersAdmin({ tournament, players, teams, settings, selectedTournament
       'final_bid_price',
       'assigned_team',
       'tshirt_size',
-      'tshirt_number'
+      'tshirt_number',
+      'payment_screenshot_url',
+      'aadhaar_card_url',
+      'stats'
     ];
-    const rows = players.map((player) => [
-      player.full_name,
-      player.mobile_number,
-      player.category || '',
-      playerCriteria(player),
-      player.base_price || 0,
-      playerMeta(player, 'registration_amount') || 0,
-      playerMeta(player, 'paid_amount') || 0,
-      player.sold_status || '',
-      player.final_bid_price || '',
-      teamNameById[player.assigned_team_id] || '',
-      playerMeta(player, 'tshirt_size') || '',
-      playerMeta(player, 'tshirt_number') || ''
-    ]);
-    const csv = [headers, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(','))
-      .join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `cpl-tournament-${selectedTournamentId || 'players'}-players-list.csv`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+    setBusy(true);
+    try {
+      const rows = await Promise.all(players.map(async (player) => {
+        const sourcePhoto = player.photo_url || playerMeta(player, 'photo_url');
+        const backupPhoto = await imageSourceToCompressedDataUrl(sourcePhoto);
+        const photoUrl = backupPhoto || sourcePhoto || '';
+        const stats = {
+          ...parseStats(player.stats),
+          photo_url: photoUrl,
+          player_criteria: playerCriteria(player),
+          tshirt_size: playerMeta(player, 'tshirt_size') || '',
+          tshirt_number: playerMeta(player, 'tshirt_number') || '',
+          registration_amount: toNumber(playerMeta(player, 'registration_amount')),
+          paid_amount: toNumber(playerMeta(player, 'paid_amount')),
+          payment_screenshot_url: playerMeta(player, 'payment_screenshot_url') || '',
+          aadhaar_card_url: playerMeta(player, 'aadhaar_card_url') || ''
+        };
+
+        return [
+          player.full_name,
+          player.mobile_number,
+          photoUrl,
+          player.category || '',
+          playerCriteria(player),
+          player.base_price || 0,
+          playerMeta(player, 'registration_amount') || 0,
+          playerMeta(player, 'paid_amount') || 0,
+          player.sold_status || '',
+          player.final_bid_price || '',
+          teamNameById[player.assigned_team_id] || '',
+          playerMeta(player, 'tshirt_size') || '',
+          playerMeta(player, 'tshirt_number') || '',
+          playerMeta(player, 'payment_screenshot_url') || '',
+          playerMeta(player, 'aadhaar_card_url') || '',
+          JSON.stringify(stats)
+        ];
+      }));
+      const csv = [headers, ...rows]
+        .map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `pas-tournament-${selectedTournamentId || 'players'}-players-backup.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      setMessage('Players backup downloaded. Is CSV se photo restore bhi ho jayegi.');
+    } catch (error) {
+      setMessage(error.message || 'Players backup download nahi ho paya.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   function printBlankPlayerList() {
@@ -5385,7 +5446,11 @@ function PlayersAdmin({ tournament, players, teams, settings, selectedTournament
       const payload = rows
         .map((row) => {
           const stats = parseStats(pickField(row, ['stats', 'statistics']));
-          const photoUrl = String(pickField(row, ['photo_url', 'photo', 'image_url'])).trim();
+          const photoUrl = String(
+            pickField(row, ['photo_url', 'photo_backup', 'photo', 'image_url', 'player_photo'])
+              || stats.photo_url
+              || ''
+          ).trim();
           const criteria = titleCase(String(pickField(row, ['player_criteria', 'criteria', 'grade', 'player_grade'])).trim()) || defaultPlayerCriteria;
           const tshirtSize = String(pickField(row, ['tshirt_size', 't_shirt_size', 'shirt_size'])).trim().toUpperCase();
           const tshirtNumber = numericText(pickField(row, ['tshirt_number', 't_shirt_number', 'shirt_number', 'tshirt_no', 't_shirt_no']));
@@ -7254,7 +7319,7 @@ function WhatsAppActionButton({ title, sent, disabled, onClick, children }) {
       disabled={disabled}
     >
       {children}
-      {sent && <span className="sent-check">✓</span>}
+      {sent && <span className="sent-check">OK</span>}
     </button>
   );
 }

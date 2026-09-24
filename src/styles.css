@@ -1285,14 +1285,14 @@ tr:last-child td {
   right: -5px;
   top: -7px;
   display: grid;
-  width: 17px;
+  width: 24px;
   height: 17px;
   place-items: center;
   border: 1px solid rgba(7, 19, 9, 0.44);
   border-radius: 999px;
   color: #071309;
   background: var(--green);
-  font-size: 0.72rem;
+  font-size: 0.58rem;
   font-weight: 950;
   line-height: 1;
 }
@@ -2616,10 +2616,10 @@ td input[type="checkbox"] {
 
 .public-protection-watermark {
   position: fixed;
-  right: 18px;
-  bottom: 94px;
+  right: 96px;
+  bottom: 28px;
   z-index: 38;
-  max-width: min(260px, 70vw);
+  max-width: min(230px, 58vw);
   padding: 9px 12px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
@@ -3518,7 +3518,7 @@ td input[type="checkbox"] {
 
 .site-footer {
   position: relative;
-  padding: clamp(38px, 5vw, 64px) clamp(16px, 5vw, 72px) 22px;
+  padding: clamp(38px, 5vw, 64px) clamp(16px, 5vw, 72px) clamp(104px, 9vw, 132px);
   border-top: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(245, 197, 66, 0.06), rgba(156, 255, 74, 0.04)),
@@ -3663,6 +3663,7 @@ td input[type="checkbox"] {
 
 .footer-bottom {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   max-width: 1460px;
@@ -3681,28 +3682,35 @@ td input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 10px;
-  text-align: center;
+  margin-left: auto;
+  text-align: left;
 }
 
 .footer-developer-brand {
   display: grid;
+  align-items: start;
   justify-items: center;
   gap: 4px;
-  min-width: 82px;
+  width: 84px;
+  min-width: 84px;
 }
 
 .footer-developer-brand img {
   display: block;
-  width: 58px;
-  height: 58px;
+  width: 64px;
+  height: 64px;
   object-fit: contain;
-  border-radius: 4px;
+  border: 1px solid rgba(156, 255, 74, 0.34);
+  border-radius: 8px;
   background: #fff;
+  padding: 3px;
 }
 
 .footer-developer-brand strong {
   font-size: 0.8rem;
   line-height: 1.1;
+  text-align: center;
+  white-space: normal;
 }
 
 .floating-site-actions {
@@ -3731,7 +3739,8 @@ td input[type="checkbox"] {
 .back-to-top {
   border-radius: 8px;
   background: var(--gold);
-  font-size: 1.6rem;
+  font-size: 0.78rem;
+  letter-spacing: 0;
 }
 
 .site-popup {
@@ -4421,15 +4430,26 @@ td input[type="checkbox"] {
 
   .footer-bottom {
     flex-direction: column;
+    align-items: flex-start;
   }
 
   .footer-developer {
     align-self: flex-start;
+    margin-left: 0;
+  }
+
+  .public-protection-watermark {
+    right: 76px;
+    bottom: 16px;
+    max-width: calc(100vw - 150px);
+    padding: 7px 9px;
+    font-size: 0.68rem;
   }
 
   .floating-site-actions {
     right: 16px;
     bottom: 16px;
+    gap: 10px;
   }
 
   .whatsapp-float,
