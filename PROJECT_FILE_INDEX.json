@@ -1,0 +1,197 @@
+{
+  "generated_at": "2026-09-14",
+  "project_root": "F:\\CPL APP RJN",
+  "project_name": "cpl-auction",
+  "type": "vite-react-supabase-app",
+  "package": {
+    "file": "package.json",
+    "scripts": {
+      "dev": "vite --host 127.0.0.1",
+      "build": "vite build",
+      "preview": "vite preview --host 127.0.0.1"
+    },
+    "dependencies": [
+      "@supabase/supabase-js",
+      "lucide-react",
+      "react",
+      "react-dom",
+      "read-excel-file"
+    ],
+    "dev_dependencies": [
+      "@vitejs/plugin-react",
+      "vite"
+    ]
+  },
+  "core_files": [
+    {
+      "path": "src/App.jsx",
+      "purpose": "Main React application containing public website, admin dashboard, registration, auction, team owner bidding, player dashboard, projector view, tournament management, reports, and match scoring."
+    },
+    {
+      "path": "src/main.jsx",
+      "purpose": "React entry point mounted from index.html."
+    },
+    {
+      "path": "src/styles.css",
+      "purpose": "Global styles for layout, dashboard, forms, tables, public website, and responsive UI."
+    },
+    {
+      "path": "src/lib/supabase.js",
+      "purpose": "Creates the Supabase client from Vite environment variables."
+    },
+    {
+      "path": "index.html",
+      "purpose": "Vite HTML shell."
+    },
+    {
+      "path": "README.md",
+      "purpose": "Human setup, run, Supabase, and deployment instructions."
+    }
+  ],
+  "database_files": [
+    {
+      "path": "database/schema.sql",
+      "purpose": "Canonical full Supabase schema for a fresh CPL Auction database."
+    },
+    {
+      "path": "database/add-tournament-management.sql",
+      "purpose": "Adds tournament tables, per-tournament settings, and tournament_id migration for existing data."
+    },
+    {
+      "path": "database/add-website-control.sql",
+      "purpose": "Adds website_content table, policies, and realtime publication."
+    },
+    {
+      "path": "database/add-team-owner-bidding.sql",
+      "purpose": "Adds team owner credentials/login and team owner bid RPC support."
+    },
+    {
+      "path": "database/add-match-scoring.sql",
+      "purpose": "Adds matches and score_balls tables for live scoring."
+    },
+    {
+      "path": "database/add-player-registration-workflow.sql",
+      "purpose": "Adds registration workflow table and Supabase storage buckets/policies."
+    },
+    {
+      "path": "database/add-player-criteria.sql",
+      "purpose": "Adds player criteria/grade support with Silver Player as the default."
+    },
+    {
+      "path": "database/set-default-player-criteria-silver.sql",
+      "purpose": "One-time migration to default new players to Silver Player and fill blank existing criteria."
+    },
+    {
+      "path": "database/fix-registration-table-only.sql",
+      "purpose": "Quick fix for missing player_registrations table/columns."
+    },
+    {
+      "path": "database/allow-public-player-photo-save.sql",
+      "purpose": "Quick fix for public player insert policy and photo-related player columns."
+    },
+    {
+      "path": "database/add-player-photo-shirt-fields.sql",
+      "purpose": "Adds player photo, shirt size, and shirt number support to existing databases."
+    },
+    {
+      "path": "database/add-player-payment-file-columns.sql",
+      "purpose": "Adds paid amount, payment screenshot, and Aadhaar columns."
+    }
+  ],
+  "generated_handover_files": [
+    {
+      "path": "PROJECT_AI_HANDOVER.md",
+      "purpose": "AI/developer continuation notes for setup, features, database, and known issues."
+    },
+    {
+      "path": "PROJECT_DATABASE_SCHEMA_EXPORT.sql",
+      "purpose": "Standalone copy of the current canonical Supabase schema."
+    },
+    {
+      "path": "PROJECT_FILE_INDEX.json",
+      "purpose": "Structured project file map."
+    }
+  ],
+  "deployment_files": [
+    {
+      "path": "vercel.json",
+      "purpose": "Vercel SPA routing/deployment config."
+    },
+    {
+      "path": "netlify.toml",
+      "purpose": "Netlify SPA routing/deployment config."
+    }
+  ],
+  "asset_files": [
+    {
+      "path": "public/create-computer-logo.jpeg",
+      "purpose": "Public image asset."
+    },
+    {
+      "path": "1.jpg",
+      "purpose": "Project image asset."
+    },
+    {
+      "path": "p1.jfif",
+      "purpose": "Project image asset."
+    },
+    {
+      "path": "Image/download.jfif",
+      "purpose": "Project image asset."
+    },
+    {
+      "path": "Tournament _edit.docx",
+      "purpose": "Tournament-related Word document."
+    },
+    {
+      "path": "Supabase_Startup.txt",
+      "purpose": "Supabase startup notes."
+    }
+  ],
+  "ignored_or_generated_folders": [
+    {
+      "path": "node_modules",
+      "reason": "Installed dependencies; recreate with npm install."
+    },
+    {
+      "path": "dist",
+      "reason": "Build output; recreate with npm run build."
+    }
+  ],
+  "environment": {
+    "required_file": ".env",
+    "required_variables": [
+      "VITE_SUPABASE_URL",
+      "VITE_SUPABASE_ANON_KEY"
+    ],
+    "note": "URL and anon key must come from the same Supabase project."
+  },
+  "primary_supabase_tables": [
+    "admin_users",
+    "tournaments",
+    "teams",
+    "team_owner_credentials",
+    "players",
+    "player_registrations",
+    "auction_logs",
+    "tournament_settings",
+    "website_content",
+    "matches",
+    "score_balls"
+  ],
+  "main_app_features": [
+    "Public tournament website",
+    "Admin login and dashboard",
+    "Tournament create/edit/delete",
+    "Team create/edit/delete with owner credentials",
+    "Player registration with photo/payment/Aadhaar fields",
+    "Player import from CSV/XLSX",
+    "Live auction control",
+    "Team owner bidding",
+    "Player dashboard",
+    "Projector display",
+    "Auction history report",
+    "Website content admin",
+    "Match scoring"
+  ]
+}

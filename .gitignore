@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-deploy
+dist-single
+dist-deploy.zip
+dist-single-deploy.zip
+.env
+.env.local
+.DS_Store
+npm-debug.log*
+*.txt
+*.docx
+
+# Local Netlify folder
+.netlify
+.netlify-appdata
