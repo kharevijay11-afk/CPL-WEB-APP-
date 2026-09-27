@@ -2,8 +2,10 @@ node_modules
 dist
 dist-deploy
 dist-single
+dist-single-build
 dist-deploy.zip
 dist-single-deploy.zip
+.clean-github-upload-*/
 .env
 .env.local
 .DS_Store

@@ -18,14 +18,6 @@ create table if not exists public.owner_passes (
 );
 
 insert into public.app_config (key, value)
-values ('admin_password', jsonb_build_object('value', 'admin123'))
-on conflict (key) do nothing;
-
-insert into public.app_config (key, value)
-values ('subadmin_password', jsonb_build_object('value', '12345'))
-on conflict (key) do nothing;
-
-insert into public.app_config (key, value)
 select 'active_tournament_id', jsonb_build_object('value', id)
 from public.tournaments
 order by created_at desc nulls last, id desc
@@ -53,6 +45,13 @@ create policy "Public can read owner passes"
 on public.owner_passes for select
 to anon, authenticated
 using (true);
+
+drop policy if exists "Admins can manage owner passes" on public.owner_passes;
+create policy "Admins can manage owner passes"
+on public.owner_passes for all
+to authenticated
+using (exists (select 1 from public.admin_users where user_id = auth.uid()))
+with check (exists (select 1 from public.admin_users where user_id = auth.uid()));
 
 drop function if exists public.team_owner_pass_bid(bigint, bigint, text, text, bigint);
 

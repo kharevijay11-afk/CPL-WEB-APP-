@@ -100,7 +100,7 @@ create table if not exists public.auction_logs (
 
 create table if not exists public.tournament_settings (
   tournament_id bigint primary key references public.tournaments(id) on delete cascade,
-  team_count integer not null default 8 check (team_count in (2, 4, 8, 10, 12, 14, 16)),
+  team_count integer not null default 8 check (team_count > 0 and team_count <= 64),
   currency_mode text not null default 'Points' check (currency_mode in ('Points', 'INR')),
   current_player_id bigint references public.players(id) on delete set null,
   current_bid_amount numeric(12, 2) not null default 0,
@@ -112,6 +112,21 @@ create table if not exists public.website_content (
   tournament_id bigint primary key references public.tournaments(id) on delete cascade,
   content jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.app_config (
+  key text primary key,
+  value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.owner_passes (
+  id bigint generated always as identity primary key,
+  tournament_id bigint not null references public.tournaments(id) on delete cascade,
+  player_id bigint not null references public.players(id) on delete cascade,
+  team_id bigint not null references public.teams(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  constraint owner_passes_unique unique (tournament_id, player_id, team_id)
 );
 
 create table if not exists public.matches (

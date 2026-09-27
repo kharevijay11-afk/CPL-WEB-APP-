@@ -1,15 +1,15 @@
-# CPL Auction
+# Players Auction System
 
-A full-stack Cricket Players Auction web app using React, Supabase Auth, Supabase Database, and Supabase Realtime. It is ready for free deployment on Vercel or Netlify.
+A full-stack players auction and match scoring web app using React, Supabase Auth, Supabase Database, and Supabase Realtime. It is ready for free deployment on Vercel or Netlify.
 
 ## Features
 
-- Admin/Auctioneer dashboard with Supabase email/password authentication.
+- Admin/Auctioneer dashboard with Supabase authentication.
 - Multiple tournaments with separate teams, players, auction logs, and settings.
 - Tournament profile with name, start date, end date, address, logo URL, and description.
 - Edit/delete tables for tournaments, teams, and players.
 - Print-ready A4 tournament pamphlet from the Admin dashboard.
-- Tournament size configuration for 2, 4, 8, 10, 12, 14, or 16 teams.
+- Tournament size configuration for fixed or custom team counts.
 - Team budget, remaining purse, roster size, and standings tracking.
 - Player import from CSV or modern Excel XLSX with photo URL, category, T-shirt size, and T-shirt number fields.
 - Public player registration form with camera/gallery photo upload, payment screenshot upload, Aadhaar upload, paid amount, and admin review.
@@ -24,7 +24,7 @@ A full-stack Cricket Players Auction web app using React, Supabase Auth, Supabas
 2. Open `SQL Editor`.
 3. Paste the full contents of [`database/schema.sql`](database/schema.sql).
 4. Run the SQL.
-5. Go to `Authentication > Users` and create an admin user with email `admin@cpl.com` and password `admin123`.
+5. Go to `Authentication > Users` and create an admin user with your own secure email and password.
 6. Copy that user's UUID.
 7. Return to `SQL Editor` and run:
 
@@ -33,10 +33,7 @@ insert into public.admin_users (user_id, display_name)
 values ('PASTE_AUTH_USER_UUID_HERE', 'Auction Admin');
 ```
 
-The app admin login is fixed as:
-
-- Admin ID: `admin`
-- Password: `admin123`
+Keep login details private. Do not commit real admin IDs, passwords, Supabase keys, or service-role keys to GitHub.
 
 8. Go to `Project Settings > API`.
 9. Copy the `Project URL` and `anon public` key.
@@ -76,9 +73,18 @@ Create a `.env` file in the project root:
 ```bash
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-public-key
+VITE_ADMIN_ID=admin
+VITE_ADMIN_EMAIL=your-admin-email@example.com
+VITE_ADMIN_PASSWORD=your-secure-admin-password
+VITE_SUBADMIN_ID=subadmin
+VITE_SUBADMIN_PASSWORD=your-secure-subadmin-password
+VITE_SCORER_ID=scorer
+VITE_SCORER_PASSWORD=your-secure-scorer-password
 ```
 
 Never put the Supabase service-role key in this frontend app.
+
+Keep the real `.env` file local only. Commit only `.env.example`.
 
 ## Run Locally
 
@@ -112,6 +118,16 @@ Open the local URL printed by Vite.
    - `VITE_SUPABASE_ANON_KEY`
 6. Deploy.
 
+## Single-File ZIP Deploy
+
+For hosting panels that accept a static zip upload:
+
+```bash
+npm run build:single
+```
+
+Then zip the contents of `dist-single`. Do not commit generated build folders or zip files to GitHub.
+
 ## Player Import Template
 
 The Admin dashboard includes a `Download template CSV` button. Headers:
@@ -133,5 +149,3 @@ full_name,mobile_number,photo_url,base_price,category,tshirt_size,tshirt_number,
 - Player login works inside the currently selected tournament.
 
 Example: `Virat Kohli` uses password `virat`.
-# CPL-WEB-APP-
-# CPL-WEB-APP-

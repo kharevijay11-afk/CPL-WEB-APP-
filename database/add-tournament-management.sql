@@ -7,6 +7,9 @@ create table if not exists public.tournaments (
   start_date date,
   end_date date,
   auction_end_date date,
+  auction_end_time time,
+  tournament_format text not null default 'League' check (tournament_format in ('League', 'Knockout')),
+  group_count integer not null default 0 check (group_count in (0, 2, 4)),
   registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0),
   address text,
   logo_url text,
@@ -18,6 +21,15 @@ alter table public.tournaments
 add column if not exists auction_end_date date;
 
 alter table public.tournaments
+add column if not exists auction_end_time time;
+
+alter table public.tournaments
+add column if not exists tournament_format text not null default 'League';
+
+alter table public.tournaments
+add column if not exists group_count integer not null default 0;
+
+alter table public.tournaments
 add column if not exists registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0);
 
 insert into public.tournaments (name)
@@ -25,9 +37,31 @@ select 'CPL Tournament'
 where not exists (select 1 from public.tournaments);
 
 alter table public.teams add column if not exists tournament_id bigint references public.tournaments(id) on delete cascade;
+alter table public.teams add column if not exists group_name text;
 alter table public.players add column if not exists tournament_id bigint references public.tournaments(id) on delete cascade;
 alter table public.player_registrations add column if not exists tournament_id bigint references public.tournaments(id) on delete cascade;
 alter table public.auction_logs add column if not exists tournament_id bigint references public.tournaments(id) on delete cascade;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'tournaments_tournament_format_check') then
+    alter table public.tournaments
+    add constraint tournaments_tournament_format_check
+    check (tournament_format in ('League', 'Knockout'));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'tournaments_group_count_check') then
+    alter table public.tournaments
+    add constraint tournaments_group_count_check
+    check (group_count in (0, 2, 4));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'teams_group_name_check') then
+    alter table public.teams
+    add constraint teams_group_name_check
+    check (group_name is null or group_name in ('A', 'B', 'C', 'D'));
+  end if;
+end $$;
 
 update public.teams
 set tournament_id = (select id from public.tournaments order by id limit 1)

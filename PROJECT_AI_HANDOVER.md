@@ -21,6 +21,17 @@ Recent behavior notes:
 - Player criteria can be changed only from Admin Panel > Players > Add/Edit Player.
 - Live Auction projector shows a large Sold/Unsold result with player name, points/price, and team name, then returns to "Choose The Next Player".
 - Bid increment is currently `1000`.
+- Teams and Tournament Details tables support select-all and delete selected.
+- Tournament team count is custom numeric input, supporting more than 16 teams up to the database check limit of 64.
+- Player photo uploads use a 3:4 passport-size crop control and save as compressed JPEG data URLs.
+- Player/owner sessions and Supabase admin auth use session storage so closing the app/tab logs sessions out.
+- Public mobile header uses a hamburger menu; navigation/login links stay hidden until the menu button is tapped.
+- Public mobile player registration is compacted with smaller spacing, photo crop, inputs, and save button.
+- Admin Players Table has a selected-tournament CSV download button for player lists.
+- Login is consolidated into one Login panel with Player, Owner, and Admin tabs.
+- Team Owner and Match Scoring mobile layouts are compacted to reduce scrolling.
+- Latest created tournament is treated as the active tournament across devices; realtime tournament changes reload the current data so mobile browsers do not stay stuck on an older saved local selection.
+- `database/add-global-config-and-owner-pass.sql` adds active tournament sync, admin password config, and owner Pass button support. Run it in existing Supabase projects before using those features.
 
 ## Current Run Commands
 
@@ -65,7 +76,7 @@ For a new Supabase project:
 3. Go to SQL Editor.
 4. Paste and run `database/schema.sql`.
 5. Go to Authentication > Users.
-6. Create an admin user with email `admin@cpl.com` and password `admin123`.
+6. Create an admin user with your own secure email and password.
 7. Copy the auth user UUID.
 8. Run:
 
@@ -74,17 +85,27 @@ insert into public.admin_users (user_id, display_name)
 values ('PASTE_AUTH_USER_UUID_HERE', 'Auction Admin');
 ```
 
-The app admin screen uses:
+Keep real login details private. Use project-specific values in your local `.env` / deployment environment, and do not commit real passwords to GitHub.
 
 ```text
-Admin ID: admin
-Password: admin123
+Admin ID: your-admin-id
+Password: your-secure-password
+```
+
+Required private auth environment variables:
+
+```text
+VITE_ADMIN_EMAIL
+VITE_ADMIN_PASSWORD
+VITE_SUBADMIN_PASSWORD
+VITE_SCORER_PASSWORD
 ```
 
 ## Database Files
 
 - `database/schema.sql`: canonical full schema for a fresh Supabase project.
 - `database/add-tournament-management.sql`: migration for tournament-wise data separation.
+- `database/allow-custom-team-count.sql`: updates existing database team-count constraint to allow custom counts up to 64.
 - `database/add-website-control.sql`: website content table and policies.
 - `database/add-team-owner-bidding.sql`: team owner login and bidding support.
 - `database/add-match-scoring.sql`: match and ball-by-ball scoring schema.

@@ -15,12 +15,21 @@ create table if not exists public.tournaments (
   name text not null,
   start_date date,
   end_date date,
+  auction_end_date date,
+  auction_end_time time,
+  tournament_format text not null default 'League' check (tournament_format in ('League', 'Knockout')),
+  group_count integer not null default 0 check (group_count in (0, 2, 4)),
   registration_amount numeric(12, 2) not null default 1000 check (registration_amount >= 0),
   address text,
   logo_url text,
   description text,
   created_at timestamptz not null default now()
 );
+
+alter table public.tournaments add column if not exists auction_end_date date;
+alter table public.tournaments add column if not exists auction_end_time time;
+alter table public.tournaments add column if not exists tournament_format text not null default 'League';
+alter table public.tournaments add column if not exists group_count integer not null default 0;
 
 create table if not exists public.teams (
   id bigint generated always as identity primary key,
@@ -30,6 +39,9 @@ create table if not exists public.teams (
   owner_mobile text check (owner_mobile is null or owner_mobile ~ '^[0-9]{10}$'),
   total_budget numeric(12, 2) not null default 0 check (total_budget >= 0),
   remaining_budget numeric(12, 2) not null default 0 check (remaining_budget >= 0),
+  budget_topup_count integer not null default 0 check (budget_topup_count >= 0),
+  budget_topup_history jsonb not null default '[]'::jsonb,
+  group_name text check (group_name is null or group_name in ('A', 'B', 'C', 'D')),
   max_players integer not null default 16 check (max_players > 0),
   current_player_count integer not null default 0 check (current_player_count >= 0),
   created_at timestamptz not null default now()
@@ -43,6 +55,42 @@ create table if not exists public.team_owner_credentials (
 
 alter table public.teams
 add column if not exists owner_mobile text check (owner_mobile is null or owner_mobile ~ '^[0-9]{10}$');
+
+alter table public.teams
+add column if not exists budget_topup_count integer not null default 0 check (budget_topup_count >= 0);
+
+alter table public.teams
+add column if not exists budget_topup_history jsonb not null default '[]'::jsonb;
+
+alter table public.teams
+add column if not exists group_name text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'tournaments_tournament_format_check'
+  ) then
+    alter table public.tournaments
+    add constraint tournaments_tournament_format_check
+    check (tournament_format in ('League', 'Knockout'));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'tournaments_group_count_check'
+  ) then
+    alter table public.tournaments
+    add constraint tournaments_group_count_check
+    check (group_count in (0, 2, 4));
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'teams_group_name_check'
+  ) then
+    alter table public.teams
+    add constraint teams_group_name_check
+    check (group_name is null or group_name in ('A', 'B', 'C', 'D'));
+  end if;
+end $$;
 
 create table if not exists public.players (
   id bigint generated always as identity primary key,
@@ -511,6 +559,8 @@ alter table public.tournament_settings enable row level security;
 alter table public.website_content enable row level security;
 alter table public.matches enable row level security;
 alter table public.score_balls enable row level security;
+alter table public.app_config enable row level security;
+alter table public.owner_passes enable row level security;
 
 drop policy if exists "Admins can read admin users" on public.admin_users;
 create policy "Admins can read admin users"
@@ -652,6 +702,32 @@ to authenticated
 using (public.is_admin())
 with check (public.is_admin());
 
+drop policy if exists "Public can read app config" on public.app_config;
+create policy "Public can read app config"
+on public.app_config for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "Public can upsert app config" on public.app_config;
+create policy "Public can upsert app config"
+on public.app_config for all
+to anon, authenticated
+using (true)
+with check (true);
+
+drop policy if exists "Public can read owner passes" on public.owner_passes;
+create policy "Public can read owner passes"
+on public.owner_passes for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "Admins can manage owner passes" on public.owner_passes;
+create policy "Admins can manage owner passes"
+on public.owner_passes for all
+to authenticated
+using (public.is_admin())
+with check (public.is_admin());
+
 do $$
 begin
   if not exists (
@@ -715,6 +791,20 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'score_balls'
   ) then
     alter publication supabase_realtime add table public.score_balls;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'app_config'
+  ) then
+    alter publication supabase_realtime add table public.app_config;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'owner_passes'
+  ) then
+    alter publication supabase_realtime add table public.owner_passes;
   end if;
 end $$;
 
