@@ -79,6 +79,9 @@ const blankTournament = {
   start_date: '',
   end_date: '',
   auction_end_date: '',
+  auction_end_hour: '11',
+  auction_end_minute: '59',
+  auction_end_period: 'PM',
   registration_amount: '1000',
   address: '',
   logo_url: '',
@@ -122,6 +125,18 @@ const tshirtSizes = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 const photoBucket = 'cpl-player-photos';
 const bidIncrement = 1000;
 const auctionResultDisplayMs = 4000;
+const auctionProgressThresholds = [25, 50, 75];
+const maxTeamBudgetTopups = 3;
+const auctionEndHours = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0'));
+const auctionEndMinutes = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, '0'));
+const auctionEndPeriods = ['AM', 'PM'];
+const tournamentFormatOptions = ['League', 'Knockout'];
+const tournamentGroupOptions = [
+  { label: 'None', value: 0 },
+  { label: '2 Groups', value: 2 },
+  { label: '4 Groups', value: 4 }
+];
+const groupLabels = ['A', 'B', 'C', 'D'];
 const defaultPassportCrop = { x: 0, y: 0, zoom: 1.08, croppedAreaPixels: null };
 const passportAspectRatio = 3 / 4;
 const passportPhotoWidth = 360;
@@ -250,6 +265,54 @@ function formatDate(value) {
   }).format(new Date(`${value}T00:00:00`));
 }
 
+function normalizeTime(value) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return '';
+  const hour = Math.min(23, Math.max(0, Number(match[1])));
+  const minute = Math.min(59, Math.max(0, Number(match[2])));
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function timeTo12HourParts(value) {
+  const time = normalizeTime(value);
+  if (!time) return { hour: '11', minute: '59', period: 'PM' };
+  const [hourText, minute] = time.split(':');
+  const hour24 = Number(hourText);
+  const period = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 || 12;
+  return { hour: String(hour12).padStart(2, '0'), minute, period };
+}
+
+function timePartsTo24Hour(hour, minute, period) {
+  const hourNumber = Number(hour);
+  const minuteNumber = Number(minute);
+  if (!Number.isInteger(hourNumber) || hourNumber < 1 || hourNumber > 12) return null;
+  if (!Number.isInteger(minuteNumber) || minuteNumber < 0 || minuteNumber > 59) return null;
+  let hour24 = hourNumber % 12;
+  if (period !== 'AM') hour24 += 12;
+  return `${String(hour24).padStart(2, '0')}:${String(minuteNumber).padStart(2, '0')}:00`;
+}
+
+function auctionEndDateTime(tournament) {
+  if (!tournament?.auction_end_date) return null;
+  const time = normalizeTime(tournament.auction_end_time) || '23:59';
+  const endDate = new Date(`${tournament.auction_end_date}T${time}:00`);
+  return Number.isNaN(endDate.getTime()) ? null : endDate;
+}
+
+function formatAuctionEndDateTime(tournament) {
+  const endDate = auctionEndDateTime(tournament);
+  if (!endDate) return '';
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(endDate);
+}
+
 function formatDateRange(startDate, endDate) {
   const start = formatDate(startDate);
   const end = formatDate(endDate);
@@ -257,24 +320,22 @@ function formatDateRange(startDate, endDate) {
   return start || end || 'Dates to be announced';
 }
 
-function localDateString(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function isAuctionRegistrationClosed(tournament) {
-  if (!tournament?.auction_end_date) return false;
-  return localDateString() > tournament.auction_end_date;
+  const endDate = auctionEndDateTime(tournament);
+  if (!endDate) return false;
+  return Date.now() > endDate.getTime();
 }
 
 function tournamentToForm(tournament) {
+  const auctionEndTime = timeTo12HourParts(tournament?.auction_end_time);
   return {
     name: tournament?.name || '',
     start_date: tournament?.start_date || '',
     end_date: tournament?.end_date || '',
     auction_end_date: tournament?.auction_end_date || '',
+    auction_end_hour: auctionEndTime.hour,
+    auction_end_minute: auctionEndTime.minute,
+    auction_end_period: auctionEndTime.period,
     registration_amount: String(tournament?.registration_amount ?? '1000'),
     address: tournament?.address || '',
     logo_url: tournament?.logo_url || '',
@@ -496,6 +557,20 @@ function calculatedTeamPlayerCount(team, players) {
   return teamSoldRoster(players, team?.id).length;
 }
 
+function teamBudgetTopupCount(team) {
+  return Math.max(0, toNumber(team?.budget_topup_count));
+}
+
+function teamBudgetTopupHistory(team) {
+  if (Array.isArray(team?.budget_topup_history)) return team.budget_topup_history;
+  try {
+    const parsed = JSON.parse(team?.budget_topup_history || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 async function syncTeamBudgetFromPlayers(team, players) {
   if (!team?.id) return { error: null };
   return supabase
@@ -704,6 +779,9 @@ function formatTournamentSaveError(error) {
   if (message.includes('auction_end_date')) {
     return `Auction End Date column missing hai. Supabase SQL Editor me database/add-auction-end-date.sql run karo. Detail: ${message}`;
   }
+  if (message.includes('auction_end_time')) {
+    return `Auction End Time column missing hai. Supabase SQL Editor me database/add-auction-end-time.sql run karo. Detail: ${message}`;
+  }
   return formatSaveError(error);
 }
 
@@ -853,14 +931,17 @@ function createDemoData() {
     start_date: '2026-09-22',
     end_date: '2026-09-30',
     auction_end_date: '2026-09-30',
+    auction_end_time: '11:59:00',
+    tournament_format: 'League',
+    group_count: 2,
     address: 'Demo Cricket Ground, Rajnandgaon',
     description: 'Read-only demo tournament for PAS Auction Software.'
   };
   const demoTeams = [
-    { id: 1, team_name: 'VCK Club', owner_name: 'Owner 1', owner_mobile: '9000000001', total_budget: 100000, remaining_budget: 82000, max_players: 16 },
-    { id: 2, team_name: 'Ramesh 11', owner_name: 'Owner 2', owner_mobile: '9000000002', total_budget: 100000, remaining_budget: 76000, max_players: 16 },
-    { id: 3, team_name: 'NV 11', owner_name: 'Owner 3', owner_mobile: '9000000003', total_budget: 100000, remaining_budget: 90000, max_players: 16 },
-    { id: 4, team_name: '11 Star Chikhali', owner_name: 'Owner 4', owner_mobile: '9000000004', total_budget: 100000, remaining_budget: 68000, max_players: 16 }
+    { id: 1, team_name: 'VCK Club', owner_name: 'Owner 1', owner_mobile: '9000000001', group_name: 'A', total_budget: 100000, remaining_budget: 82000, max_players: 16 },
+    { id: 2, team_name: 'Ramesh 11', owner_name: 'Owner 2', owner_mobile: '9000000002', group_name: 'B', total_budget: 100000, remaining_budget: 76000, max_players: 16 },
+    { id: 3, team_name: 'NV 11', owner_name: 'Owner 3', owner_mobile: '9000000003', group_name: 'A', total_budget: 100000, remaining_budget: 90000, max_players: 16 },
+    { id: 4, team_name: '11 Star Chikhali', owner_name: 'Owner 4', owner_mobile: '9000000004', group_name: 'B', total_budget: 100000, remaining_budget: 68000, max_players: 16 }
   ];
   const demoPlayers = [
     { id: 1, full_name: 'Demo All Rounder', mobile_number: '9999990001', photo_url: '/demo-players/demo-all-rounder.png', category: 'All-rounder', base_price: 1000, sold_status: 'Sold', assigned_team_id: 1, final_bid_price: 18000, stats: JSON.stringify({ player_criteria: 'Silver Player' }) },
@@ -1106,7 +1187,7 @@ function MainApp() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedTournamentId]);
+  }, [selectedTournamentId, settings.current_player_id]);
 
   useEffect(() => {
     if (!hasSupabaseConfig || !selectedTournamentId) return;
@@ -1428,6 +1509,7 @@ function MainApp() {
             teams={teams}
             players={players}
             logs={logs}
+            ownerPasses={ownerPasses}
             currentPlayer={currentPlayer}
             highestTeam={highestTeam}
             websiteContent={websiteContent}
@@ -1867,7 +1949,7 @@ function PublicWebsite({
     setPopupClosed(true);
     setMessage(disableRegistration
       ? 'Demo version me registration/save disabled hai.'
-      : `Auction registration closed${tournament?.auction_end_date ? ` on ${formatDate(tournament.auction_end_date)}` : ''}.`);
+      : `Auction registration closed${formatAuctionEndDateTime(tournament) ? ` on ${formatAuctionEndDateTime(tournament)}` : ''}.`);
   }
 
   function openRegistration(event) {
@@ -2087,7 +2169,7 @@ function PublicWebsite({
                 {disableRegistration
                   ? 'Ye demo client ko preview dikhane ke liye hai. Isme player save ya upload nahi hoga.'
                   : tournament?.auction_end_date
-                  ? `Registration ${formatDate(tournament.auction_end_date)} ke baad closed hai.`
+                  ? `Registration ${formatAuctionEndDateTime(tournament)} ke baad closed hai.`
                   : 'Registration abhi closed hai.'}
               </p>
             </div>
@@ -2821,6 +2903,8 @@ function PlayerRegistration({
   const [busy, setBusy] = useState(false);
   const registrationAmount = tournamentRegistrationAmount(tournament);
   const showPaidAmountField = Boolean(paymentFile);
+  const registrationClosed = isAuctionRegistrationClosed(tournament);
+  const registrationCloseText = formatAuctionEndDateTime(tournament);
 
   useEffect(() => {
     setBarcodePreview(paymentQrUrl || '');
@@ -2848,6 +2932,11 @@ function PlayerRegistration({
   async function submit(event) {
     event.preventDefault();
     if (!selectedTournamentId) return setMessage('Select a tournament before registration.');
+    if (registrationClosed) {
+      return setMessage(registrationCloseText
+        ? `Registration ${registrationCloseText} ke baad closed hai.`
+        : 'Registration closed hai.');
+    }
     if (requirePhoto && !photoFile) return setMessage('Player photo is required.');
 
     const mobile = digitsOnly(form.mobile_number);
@@ -2909,6 +2998,19 @@ function PlayerRegistration({
         </header>
       )}
 
+      {registrationClosed ? (
+        <section className="panel form-panel registration-closed-panel">
+          <div className="section-title">
+            <UserPlus size={20} />
+            <h2>Registration Closed</h2>
+          </div>
+          <p className="empty-text">
+            {registrationCloseText
+              ? `Registration ${registrationCloseText} ke baad closed hai.`
+              : 'Registration abhi closed hai.'}
+          </p>
+        </section>
+      ) : (
       <form className={classNames('panel registration-form', !showPhotoSection && 'without-photo-section')} onSubmit={submit}>
         {showPhotoSection && (
           <section className="registration-photo-panel">
@@ -2996,6 +3098,7 @@ function PlayerRegistration({
           )}
         </section>
       </form>
+      )}
 
       {showTable && <PlayerTable players={players} teams={[]} settings={settings} />}
     </div>
@@ -3079,6 +3182,7 @@ function AdminDashboard({
   teams,
   players,
   logs,
+  ownerPasses,
   currentPlayer,
   highestTeam,
   websiteContent,
@@ -3097,6 +3201,7 @@ function AdminDashboard({
     { key: 'website', label: 'Website Control', icon: MonitorUp },
     { key: 'auction', label: 'Live Auction', icon: Gavel },
     { key: 'scoring', label: 'Match Scoring', icon: Activity },
+    { key: 'format', label: 'Tournament Format', icon: Shuffle },
     { key: 'teams', label: 'Teams', icon: Users },
     { key: 'players', label: 'Players', icon: ListChecks },
     { key: 'standings', label: 'Standings', icon: Trophy },
@@ -3193,6 +3298,7 @@ function AdminDashboard({
           teams={teams}
           players={players}
           logs={logs}
+          ownerPasses={ownerPasses}
           currentPlayer={currentPlayer}
           highestTeam={highestTeam}
           setMessage={setMessage}
@@ -3212,7 +3318,17 @@ function AdminDashboard({
           canEdit
         />
       )}
-      {tab === 'teams' && selectedTournamentId && <TeamsAdmin teams={teams} players={players} settings={settings} selectedTournamentId={selectedTournamentId} setMessage={setMessage} />}
+      {tab === 'format' && selectedTournamentId && (
+        <TournamentFormatAdmin
+          tournament={tournament}
+          teams={teams}
+          selectedTournamentId={selectedTournamentId}
+          setMessage={setMessage}
+          loadAll={loadAll}
+          loadTournamentsAndCurrentData={loadTournamentsAndCurrentData}
+        />
+      )}
+      {tab === 'teams' && selectedTournamentId && <TeamsAdmin teams={teams} players={players} settings={settings} selectedTournamentId={selectedTournamentId} setMessage={setMessage} loadAll={loadAll} />}
       {tab === 'players' && selectedTournamentId && (
         <PlayersAdmin
           tournament={tournament}
@@ -3237,6 +3353,260 @@ function AdminDashboard({
         />
       )}
       {tab === 'security' && canManagePasswords && <AdminPasswordAdmin setMessage={setMessage} />}
+    </div>
+  );
+}
+
+function formatSetupError(error) {
+  const message = [error?.message, error?.details, error?.hint, error?.code].filter(Boolean).join(' | ');
+  if (message.includes('tournament_format') || message.includes('group_count') || message.includes('group_name')) {
+    return `Tournament Format columns missing hain. Supabase SQL Editor me database/add-tournament-format.sql run karo. Detail: ${message}`;
+  }
+  return formatSaveError(error);
+}
+
+function TournamentFormatAdmin({
+  tournament,
+  teams,
+  selectedTournamentId,
+  setMessage,
+  loadAll,
+  loadTournamentsAndCurrentData
+}) {
+  const [form, setForm] = useState({
+    tournament_format: tournament?.tournament_format || 'League',
+    group_count: String(tournament?.group_count ?? 0)
+  });
+  const [busy, setBusy] = useState(false);
+  const [updatingTeamId, setUpdatingTeamId] = useState(null);
+  const selectedGroupCount = toNumber(form.group_count, 0);
+  const activeGroups = groupLabels.slice(0, selectedGroupCount);
+  const teamsWithoutGroup = teams.filter((team) => !activeGroups.includes(team.group_name));
+
+  useEffect(() => {
+    setForm({
+      tournament_format: tournament?.tournament_format || 'League',
+      group_count: String(tournament?.group_count ?? 0)
+    });
+  }, [tournament?.id, tournament?.tournament_format, tournament?.group_count]);
+
+  function groupedTeams(groupName) {
+    return teams.filter((team) => team.group_name === groupName);
+  }
+
+  async function saveFormat(event) {
+    event?.preventDefault();
+    if (!selectedTournamentId) return setMessage('Tournament select karo.');
+    const groupCount = toNumber(form.group_count, 0);
+    if (![0, 2, 4].includes(groupCount)) return setMessage('Group option sahi select karo.');
+    const tournamentFormat = tournamentFormatOptions.includes(form.tournament_format) ? form.tournament_format : 'League';
+
+    setBusy(true);
+    try {
+      const { error } = await supabase
+        .from('tournaments')
+        .update({
+          tournament_format: tournamentFormat,
+          group_count: groupCount
+        })
+        .eq('id', selectedTournamentId);
+      if (error) throw error;
+
+      if (groupCount === 0) {
+        const { error: teamError } = await supabase
+          .from('teams')
+          .update({ group_name: null })
+          .eq('tournament_id', selectedTournamentId);
+        if (teamError) throw teamError;
+      }
+
+      await loadTournamentsAndCurrentData?.();
+      await loadAll?.();
+      setMessage('Tournament format saved.');
+    } catch (error) {
+      setMessage(formatSetupError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function autoAssignTeams() {
+    if (!selectedTournamentId) return setMessage('Tournament select karo.');
+    if (!selectedGroupCount) return setMessage('Auto assign ke liye 2 Groups ya 4 Groups select karo.');
+    if (!teams.length) return setMessage('Pehle teams add karo.');
+    setBusy(true);
+    try {
+      const { error: formatError } = await supabase
+        .from('tournaments')
+        .update({
+          tournament_format: tournamentFormatOptions.includes(form.tournament_format) ? form.tournament_format : 'League',
+          group_count: selectedGroupCount
+        })
+        .eq('id', selectedTournamentId);
+      if (formatError) throw formatError;
+
+      const sortedTeams = [...teams].sort((left, right) => String(left.team_name).localeCompare(String(right.team_name)));
+      for (const [index, team] of sortedTeams.entries()) {
+        const { error } = await supabase
+          .from('teams')
+          .update({ group_name: activeGroups[index % activeGroups.length] })
+          .eq('id', team.id);
+        if (error) throw error;
+      }
+      await loadTournamentsAndCurrentData?.();
+      await loadAll?.();
+      setMessage(`${teams.length} teams auto group assign ho gayi.`);
+    } catch (error) {
+      setMessage(formatSetupError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeTeamGroup(teamId, groupName) {
+    setUpdatingTeamId(teamId);
+    try {
+      const { error } = await supabase
+        .from('teams')
+        .update({ group_name: groupName || null })
+        .eq('id', teamId);
+      if (error) throw error;
+      await loadAll?.();
+      setMessage('Team group updated.');
+    } catch (error) {
+      setMessage(formatSetupError(error));
+    } finally {
+      setUpdatingTeamId(null);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <section className="panel form-panel tournament-format-panel">
+        <div className="section-title">
+          <Shuffle size={20} />
+          <h2>Tournament Format</h2>
+        </div>
+        <form className="format-control-grid" onSubmit={saveFormat}>
+          <label>
+            Tournament Type
+            <select value={form.tournament_format} onChange={(e) => setForm({ ...form, tournament_format: e.target.value })}>
+              {tournamentFormatOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Groups
+            <select value={form.group_count} onChange={(e) => setForm({ ...form, group_count: e.target.value })}>
+              {tournamentGroupOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="format-action-row">
+            <button className="primary-button" disabled={busy}>
+              <Save size={18} /> Save Format
+            </button>
+            <button type="button" className="accent-button" onClick={autoAssignTeams} disabled={busy || !selectedGroupCount || !teams.length}>
+              <Shuffle size={18} /> Auto Assign Teams
+            </button>
+          </div>
+        </form>
+        <p className="empty-text">
+          {form.tournament_format === 'Knockout' && selectedGroupCount
+            ? 'Knockout + Groups me group-wise knockout ke baad final stage banega.'
+            : form.tournament_format === 'Knockout'
+            ? 'Knockout + None me direct knockout bracket banega.'
+            : selectedGroupCount
+            ? 'League + Groups me group-wise points table banega.'
+            : 'League + None me sabhi teams ek hi table me rahengi.'}
+        </p>
+      </section>
+
+      <div className="format-layout">
+        <section className="panel table-panel">
+          <div className="table-topbar">
+            <div className="section-title">
+              <Users size={20} />
+              <h2>Manual Group Selection</h2>
+            </div>
+            <span className="summary-pill">{teams.length} Teams</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  <th>Owner</th>
+                  <th>Group</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teams.map((team) => (
+                  <tr key={team.id}>
+                    <td>{team.team_name}</td>
+                    <td>{team.owner_name}</td>
+                    <td>
+                      <select
+                        className="table-select"
+                        value={activeGroups.includes(team.group_name) ? team.group_name : ''}
+                        onChange={(e) => changeTeamGroup(team.id, e.target.value)}
+                        disabled={updatingTeamId === team.id || selectedGroupCount === 0}
+                      >
+                        <option value="">No Group</option>
+                        {activeGroups.map((groupName) => (
+                          <option key={groupName} value={groupName}>Group {groupName}</option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+                {!teams.length && (
+                  <tr>
+                    <td colSpan="3">No teams added yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel format-preview-panel">
+          <div className="section-title">
+            <Trophy size={20} />
+            <h2>Design Preview</h2>
+          </div>
+          {selectedGroupCount === 0 ? (
+            <div className="direct-format-preview">
+              <strong>{form.tournament_format === 'Knockout' ? 'Direct Knockout' : 'Single League Table'}</strong>
+              <span>{teams.length} teams without groups</span>
+            </div>
+          ) : (
+            <div className="group-preview-grid">
+              {activeGroups.map((groupName) => (
+                <article key={groupName} className="group-preview-card">
+                  <h3>Group {groupName}</h3>
+                  <div>
+                    {groupedTeams(groupName).map((team) => (
+                      <span key={team.id}>{team.team_name}</span>
+                    ))}
+                    {!groupedTeams(groupName).length && <small>No team assigned</small>}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          {Boolean(selectedGroupCount && teamsWithoutGroup.length) && (
+            <div className="unassigned-team-box">
+              <strong>No Group</strong>
+              <div>
+                {teamsWithoutGroup.map((team) => <span key={team.id}>{team.team_name}</span>)}
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
@@ -3583,6 +3953,10 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
     if (!form.name.trim()) return setMessage('Tournament name is required.');
     const registrationAmount = toNumber(form.registration_amount);
     if (registrationAmount <= 0) return setMessage('Player registration amount 0 se jyada hona chahiye.');
+    const auctionEndTime = form.auction_end_date
+      ? timePartsTo24Hour(form.auction_end_hour, form.auction_end_minute, form.auction_end_period)
+      : null;
+    if (form.auction_end_date && !auctionEndTime) return setMessage('Auction end time sahi select karo.');
 
     setBusy(true);
     if (editingTournamentId) {
@@ -3593,6 +3967,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
           start_date: form.start_date || null,
           end_date: form.end_date || null,
           auction_end_date: form.auction_end_date || null,
+          auction_end_time: auctionEndTime,
           registration_amount: registrationAmount,
           address: form.address.trim() || null,
           logo_url: form.logo_url.trim() || null,
@@ -3615,6 +3990,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
         start_date: form.start_date || null,
         end_date: form.end_date || null,
         auction_end_date: form.auction_end_date || null,
+        auction_end_time: auctionEndTime,
         registration_amount: registrationAmount,
         address: form.address.trim() || null,
         logo_url: form.logo_url.trim() || null,
@@ -3704,6 +4080,26 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
               Auction End Date
               <input type="date" value={form.auction_end_date} onChange={(e) => setForm({ ...form, auction_end_date: e.target.value })} />
             </label>
+            <label className="auction-time-field">
+              Auction End Time
+              <span className="time-select-row">
+                <select value={form.auction_end_hour} onChange={(e) => setForm({ ...form, auction_end_hour: e.target.value })}>
+                  {auctionEndHours.map((hour) => (
+                    <option key={hour} value={hour}>{Number(hour)}</option>
+                  ))}
+                </select>
+                <select value={form.auction_end_minute} onChange={(e) => setForm({ ...form, auction_end_minute: e.target.value })}>
+                  {auctionEndMinutes.map((minute) => (
+                    <option key={minute} value={minute}>{minute}</option>
+                  ))}
+                </select>
+                <select value={form.auction_end_period} onChange={(e) => setForm({ ...form, auction_end_period: e.target.value })}>
+                  {auctionEndPeriods.map((period) => (
+                    <option key={period} value={period}>{period}</option>
+                  ))}
+                </select>
+              </span>
+            </label>
             <label>
               Player Registration Amount
               <input inputMode="numeric" value={form.registration_amount} onChange={(e) => setForm({ ...form, registration_amount: numericText(e.target.value) })} required />
@@ -3748,6 +4144,7 @@ function TournamentAdmin({ settings, tournament, tournaments, selectedTournament
           <p className="eyebrow">Selected Tournament</p>
           <h2>{tournament?.name || 'No tournament selected'}</h2>
           <p><CalendarDays size={16} /> {formatDateRange(tournament?.start_date, tournament?.end_date)}</p>
+          <p><CalendarDays size={16} /> Registration Close: {formatAuctionEndDateTime(tournament) || 'Not set'}</p>
           <p><BadgeIndianRupee size={16} /> Registration: {formatMoney(tournamentRegistrationAmount(tournament), settings.currency_mode)}</p>
           <p><MapPin size={16} /> {tournament?.address || 'Address not added'}</p>
         </section>
@@ -3871,6 +4268,18 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
     id: `sample-${index}`,
     team_name: `Team ${index + 1}`
   }));
+  const defaultScheduleMode = tournament?.tournament_format === 'Knockout' && toNumber(tournament?.group_count) === 4
+    ? 'groupKnockout4'
+    : tournament?.tournament_format === 'Knockout'
+    ? 'knockout'
+    : toNumber(tournament?.group_count) === 4
+    ? 'pools4'
+    : toNumber(tournament?.group_count) === 2
+    ? 'pools'
+    : 'single';
+  const isSixteenTeamFourPoolLeague = activeTeams.length === 16
+    && tournament?.tournament_format !== 'Knockout'
+    && toNumber(tournament?.group_count) === 4;
   const defaultDraft = {
     title: tournament?.name || 'Cricket Premier',
     subtitle: 'Tennis Ball Cricket Tournament',
@@ -3879,14 +4288,15 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
     entryFee: '2000',
     firstPrize: '7000',
     secondPrize: '3500',
-    scheduleMode: 'single',
+    scheduleMode: defaultScheduleMode,
+    showSchedulePages: true,
     poolAssignments: {},
-    matchesPerDay: '1',
+    matchesPerDay: '2',
     sundayMatches: '2',
     playoffMatches: '3',
-    playoffMatchesPerDay: '1',
+    playoffMatchesPerDay: isSixteenTeamFourPoolLeague ? '3' : '2',
     firstMatchTime: '07:00',
-    matchGapMinutes: '150',
+    matchGapMinutes: '30',
     venue: tournament?.address || 'Venue to be announced',
     rules: [
       '7 Over Match',
@@ -3920,7 +4330,7 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
 
   useEffect(() => {
     setDraft({ ...defaultDraft, ...(savedDraft || {}) });
-  }, [tournament?.id, teams.length, savedDraftKey]);
+  }, [tournament?.id, tournament?.tournament_format, tournament?.group_count, teams.length, savedDraftKey]);
 
   if (!tournament) {
     return (
@@ -3983,16 +4393,44 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
     return pairs;
   }
 
+  function isPoolSchedule() {
+    return draft.scheduleMode === 'pools' || draft.scheduleMode === 'pools4' || draft.scheduleMode === 'groupKnockout4';
+  }
+
+  function isPoolLeagueSchedule() {
+    return draft.scheduleMode === 'pools' || draft.scheduleMode === 'pools4';
+  }
+
+  function activePoolLabels() {
+    if (draft.scheduleMode === 'pools4' || draft.scheduleMode === 'groupKnockout4') return ['A', 'B', 'C', 'D'];
+    if (draft.scheduleMode === 'pools') return ['A', 'B'];
+    return [];
+  }
+
+  function scheduleModeLabel() {
+    if (draft.scheduleMode === 'groupKnockout4') return '4 Group Knockout';
+    if (draft.scheduleMode === 'pools4') return '4 Pool League';
+    if (draft.scheduleMode === 'pools') return '2 Pool League';
+    if (draft.scheduleMode === 'knockout') return 'Knockout Fixture';
+    return 'Single League / Round Robin';
+  }
+
+  function autoPoolForIndex(index) {
+    const labels = activePoolLabels();
+    if (!labels.length) return '';
+    if (labels.length === 2) return index < Math.ceil(activeTeams.length / 2) ? 'A' : 'B';
+    return labels[index % labels.length];
+  }
+
   function leaguePairs() {
-    if (draft.scheduleMode === 'pools') {
-      const [poolA, poolB] = poolTeams();
-      const poolAPairs = buildRoundRobinPairs(poolA, 'Pool - A');
-      const poolBPairs = buildRoundRobinPairs(poolB, 'Pool - B');
+    if (isPoolLeagueSchedule()) {
+      const poolPairGroups = poolTeams().map((pool) => buildRoundRobinPairs(pool.teams, `Pool - ${pool.label}`));
       const alternatingPairs = [];
-      const pairCount = Math.max(poolAPairs.length, poolBPairs.length);
+      const pairCount = Math.max(...poolPairGroups.map((pairs) => pairs.length), 0);
       for (let index = 0; index < pairCount; index += 1) {
-        if (poolAPairs[index]) alternatingPairs.push(poolAPairs[index]);
-        if (poolBPairs[index]) alternatingPairs.push(poolBPairs[index]);
+        poolPairGroups.forEach((pairs) => {
+          if (pairs[index]) alternatingPairs.push(pairs[index]);
+        });
       }
       return alternatingPairs;
     }
@@ -4000,17 +4438,17 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
   }
 
   function poolTeams() {
-    const splitIndex = Math.ceil(activeTeams.length / 2);
+    const labels = activePoolLabels();
     const assignments = draft.poolAssignments || {};
-    const poolA = [];
-    const poolB = [];
+    const pools = labels.map((label) => ({ label, className: `pool-${label.toLowerCase()}`, teams: [] }));
     activeTeams.forEach((team, index) => {
       const savedPool = assignments[String(team.id)];
-      const pool = savedPool === 'A' || savedPool === 'B' ? savedPool : (index < splitIndex ? 'A' : 'B');
-      if (pool === 'B') poolB.push(team);
-      else poolA.push(team);
+      const presetPool = labels.includes(team.group_name) ? team.group_name : '';
+      const pool = labels.includes(savedPool) ? savedPool : presetPool || autoPoolForIndex(index);
+      const targetPool = pools.find((item) => item.label === pool) || pools[0];
+      targetPool?.teams.push(team);
     });
-    return [poolA, poolB];
+    return pools;
   }
 
   function teamColorStyle(team) {
@@ -4041,7 +4479,160 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
     return chunks.length ? chunks : [[]];
   }
 
+  function knockoutRoundName(slots, isFinalRound = false) {
+    if (isFinalRound || slots <= 2) return 'Final';
+    if (slots <= 4) return 'Semi Final';
+    if (slots <= 8) return 'Quarter Final';
+    if (slots <= 16) return 'Pre Quarter';
+    return `Round of ${slots}`;
+  }
+
+  function buildKnockoutMatches() {
+    const matches = [];
+    let roundTeams = activeTeams.map((team) => ({ label: team.team_name, team }));
+    if (roundTeams.length < 2) return matches;
+    let roundNumber = 1;
+
+    while (roundTeams.length > 1) {
+      const isFinalRound = roundTeams.length <= 2;
+      const roundName = knockoutRoundName(roundTeams.length, isFinalRound);
+      const nextRoundTeams = [];
+
+      for (let index = 0; index < roundTeams.length; index += 2) {
+        const teamA = roundTeams[index];
+        const teamB = roundTeams[index + 1] || { label: 'Bye', team: null };
+        const matchNumber = matches.length + 1;
+        matches.push({
+          roundName,
+          matchNumber,
+          teamA: teamA.team,
+          teamB: teamB.team,
+          match: `${teamA.label} vs ${teamB.label}`,
+          type: 'knockout'
+        });
+        nextRoundTeams.push({ label: `Winner Match ${matchNumber}`, team: null });
+      }
+
+      roundTeams = nextRoundTeams;
+      roundNumber += 1;
+      if (roundNumber > 8) break;
+    }
+
+    return matches;
+  }
+
+  function buildGroupKnockoutData() {
+    const groups = poolTeams();
+    const groupRounds = groups.map((group) => {
+      const teamsInGroup = group.teams.length
+        ? group.teams
+        : activeTeams
+          .filter((_, index) => groupLabels[index % 4] === group.label)
+          .slice(0, 8);
+      const quarterMatches = Array.from({ length: Math.ceil(teamsInGroup.length / 2) }, (_, index) => ({
+        roundName: `Group ${group.label} Quarter Final`,
+        shortRound: 'Quarter Final',
+        groupLabel: group.label,
+        match: `Group ${group.label} QF ${index + 1}`,
+        teamA: teamsInGroup[index * 2] || null,
+        teamB: teamsInGroup[index * 2 + 1] || null,
+        type: 'group-knockout'
+      }));
+      const semiMatches = [1, 2].map((number) => ({
+        roundName: `Group ${group.label} Semi Final`,
+        shortRound: 'Semi Final',
+        groupLabel: group.label,
+        match: `Winner QF ${number * 2 - 1} vs Winner QF ${number * 2}`,
+        teamA: null,
+        teamB: null,
+        type: 'group-knockout'
+      }));
+      const finalMatch = {
+        roundName: `Group ${group.label} Final`,
+        shortRound: 'Group Final',
+        groupLabel: group.label,
+        match: `Winner SF 1 vs Winner SF 2`,
+        teamA: null,
+        teamB: null,
+        type: 'group-knockout'
+      };
+      return {
+        ...group,
+        teams: teamsInGroup,
+        matches: [...quarterMatches, ...semiMatches, finalMatch]
+      };
+    });
+
+    const finalStage = [
+      {
+        roundName: 'Semi Final',
+        shortRound: 'Semi Final 1',
+        match: 'Group A Winner vs Group B Winner',
+        type: 'group-final-stage'
+      },
+      {
+        roundName: 'Semi Final',
+        shortRound: 'Semi Final 2',
+        match: 'Group C Winner vs Group D Winner',
+        type: 'group-final-stage'
+      },
+      {
+        roundName: 'Final',
+        shortRound: 'Final',
+        match: 'Semi Final 1 Winner vs Semi Final 2 Winner',
+        type: 'group-final-stage'
+      }
+    ];
+
+    return { groupRounds, finalStage };
+  }
+
   function scheduleRows() {
+    if (draft.scheduleMode === 'groupKnockout4') {
+      const { groupRounds, finalStage } = buildGroupKnockoutData();
+      const matchesPerDay = Math.min(4, Math.max(1, toNumber(draft.matchesPerDay, 2)));
+      const allMatches = [
+        ...groupRounds.flatMap((group) => group.matches.map((match) => ({ ...match, poolLabel: `Group ${group.label}` }))),
+        ...finalStage
+      ];
+      return allMatches.map((match, index) => {
+        const date = addDays(tournament.start_date, Math.floor(index / matchesPerDay));
+        const slotIndex = index % matchesPerDay;
+        return {
+          no: index + 1,
+          date: formatDate(localDateValue(date)),
+          day: match.shortRound || match.roundName,
+          time: matchTimeForSlot(slotIndex),
+          teamA: match.teamA,
+          teamB: match.teamB,
+          poolLabel: match.poolLabel,
+          match: match.teamA || match.teamB
+            ? `${match.teamA?.team_name || 'Bye'} vs ${match.teamB?.team_name || 'Bye'}`
+            : match.match,
+          type: match.type
+        };
+      });
+    }
+
+    if (draft.scheduleMode === 'knockout') {
+      const knockoutMatches = buildKnockoutMatches();
+      const matchesPerDay = Math.min(4, Math.max(1, toNumber(draft.matchesPerDay, 2)));
+      return knockoutMatches.map((match, index) => {
+        const date = addDays(tournament.start_date, Math.floor(index / matchesPerDay));
+        const slotIndex = index % matchesPerDay;
+        return {
+          no: index + 1,
+          date: formatDate(localDateValue(date)),
+          day: match.roundName,
+          time: matchTimeForSlot(slotIndex),
+          teamA: match.teamA,
+          teamB: match.teamB,
+          match: match.match,
+          type: 'knockout'
+        };
+      });
+    }
+
     const pairs = leaguePairs();
     const sundayMatches = Math.min(4, Math.max(1, toNumber(draft.sundayMatches, 2)));
     const matchesPerDay = Math.min(4, Math.max(1, toNumber(draft.matchesPerDay, 1)));
@@ -4089,12 +4680,29 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
   }
 
   const generatedScheduleRows = scheduleRows();
-  const [poolATeams, poolBTeams] = poolTeams();
-  const schedulePages = chunkItems(generatedScheduleRows, 5);
+  const poolGroups = poolTeams();
+  const poolLeagueSummary = isPoolLeagueSchedule()
+    ? (() => {
+        const perTeamMatches = poolGroups.flatMap((pool) =>
+          pool.teams.map(() => Math.max(0, pool.teams.length - 1))
+        );
+        const minimum = perTeamMatches.length ? Math.min(...perTeamMatches) : 0;
+        const maximum = perTeamMatches.length ? Math.max(...perTeamMatches) : 0;
+        return {
+          total: leaguePairs().length,
+          perTeam: minimum === maximum ? String(minimum) : `${minimum}-${maximum}`
+        };
+      })()
+    : null;
+  const groupKnockoutData = draft.scheduleMode === 'groupKnockout4'
+    ? buildGroupKnockoutData()
+    : { groupRounds: [], finalStage: [] };
+  const schedulePages = chunkItems(generatedScheduleRows, 8);
+  const visibleSchedulePages = draft.showSchedulePages === false ? [] : schedulePages;
   const teamPages = chunkItems(activeTeams, activeTeams.length > 8 ? 16 : 8);
-  const coverTeams = draft.scheduleMode === 'pools'
-    ? [...poolATeams.slice(0, 2), ...poolBTeams.slice(0, 2)]
-    : activeTeams.slice(0, 4);
+  const formatPageNumber = 2 + teamPages.length;
+  const scheduleStartPageNumber = formatPageNumber + 1;
+  const groupKnockoutStartPageNumber = scheduleStartPageNumber + visibleSchedulePages.length;
   const awardIcons = [Trophy, Crown, Star, Shield, BadgeIndianRupee];
 
   function renderAwards() {
@@ -4111,10 +4719,11 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
 
   function renderPoolTeamColumns(withLogos = false, visibleTeams = activeTeams) {
     const visibleIds = new Set(visibleTeams.map((team) => String(team.id)));
-    const pools = [
-      { label: 'Pool - A', className: 'pool-a', teams: poolATeams.filter((team) => visibleIds.has(String(team.id))) },
-      { label: 'Pool - B', className: 'pool-b', teams: poolBTeams.filter((team) => visibleIds.has(String(team.id))) }
-    ];
+    const pools = poolGroups.map((pool) => ({
+      label: `Pool - ${pool.label}`,
+      className: pool.className,
+      teams: pool.teams.filter((team) => visibleIds.has(String(team.id)))
+    }));
     return (
       <div className={classNames('pamphlet-pool-grid', withLogos && 'with-logos')}>
         {pools.map((pool) => (
@@ -4176,7 +4785,21 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
               <select value={draft.scheduleMode} onChange={(event) => updateDraft('scheduleMode', event.target.value)}>
                 <option value="single">Single League / Round Robin</option>
                 <option value="pools">2 Pool League</option>
+                <option value="pools4">4 Pool League</option>
+                <option value="knockout">Knockout</option>
+                <option value="groupKnockout4">4 Group Knockout</option>
               </select>
+            </label>
+            <label className="pamphlet-schedule-toggle">
+              Match Schedule Pages
+              <span>
+                <input
+                  type="checkbox"
+                  checked={draft.showSchedulePages !== false}
+                  onChange={(event) => updateDraft('showSchedulePages', event.target.checked)}
+                />
+                {draft.showSchedulePages !== false ? 'Display ON' : 'Display OFF'}
+              </span>
             </label>
             <label>
               Per Day Matches
@@ -4230,7 +4853,7 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
               </select>
             </label>
           </div>
-          {draft.scheduleMode === 'pools' && (
+          {isPoolSchedule() && (
             <div className="pool-assignment-editor">
               <div className="section-title">
                 <Shuffle size={18} />
@@ -4238,14 +4861,21 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
               </div>
               <div className="pool-assignment-grid">
                 {activeTeams.map((team, index) => {
-                  const currentPool = (draft.poolAssignments || {})[String(team.id)] || (index < Math.ceil(activeTeams.length / 2) ? 'A' : 'B');
+                  const labels = activePoolLabels();
+                  const savedPool = (draft.poolAssignments || {})[String(team.id)];
+                  const currentPool = labels.includes(savedPool)
+                    ? savedPool
+                    : labels.includes(team.group_name)
+                    ? team.group_name
+                    : autoPoolForIndex(index);
                   return (
                     <label key={team.id}>
                       <span className="team-color-swatch" style={teamColorStyle(team)} />
                       <strong>{team.team_name}</strong>
                       <select value={currentPool} onChange={(event) => updateTeamPool(team.id, event.target.value)}>
-                        <option value="A">Pool - A</option>
-                        <option value="B">Pool - B</option>
+                        {labels.map((label) => (
+                          <option key={label} value={label}>Pool - {label}</option>
+                        ))}
                       </select>
                     </label>
                   );
@@ -4293,9 +4923,7 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
 
       <div className="pamphlet-set">
         <section className="pamphlet-poster pamphlet-cover">
-          <div className="pamphlet-skyline" />
-          <div className="pamphlet-corner left">Play<br />Fair<br />Respect<br />Enjoy</div>
-          <div className="pamphlet-corner right">Small<br />Town<br />Big<br />Passion</div>
+          <div className="pamphlet-page-number">Page 1</div>
           <div className="pamphlet-title-lockup">
             <Crown size={36} />
             <h1>{draft.title}</h1>
@@ -4307,30 +4935,87 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
             <b>{draft.venue}</b>
           </div>
           <div className="pamphlet-card-grid">
-            <div className="pamphlet-box">
-              <h3>Teams</h3>
-              {draft.scheduleMode === 'pools' ? renderPoolTeamColumns(false, coverTeams) : (
-                <div className="pamphlet-team-chips">
-                  {coverTeams.map((team) => (
-                    <span key={team.id} style={teamColorStyle(team)}>{team.team_name}</span>
-                  ))}
-                </div>
-              )}
-              {activeTeams.length > coverTeams.length && (
-                <small className="pamphlet-more-teams">+{activeTeams.length - coverTeams.length} more teams on Team List page</small>
-              )}
+            <div className="pamphlet-box pamphlet-entry-box">
+              <BadgeIndianRupee size={58} aria-hidden="true" />
+              <span>Entry Fee</span>
+              <strong>Rs {draft.entryFee || 0}</strong>
+              <small>Per Team</small>
             </div>
-            <div className="pamphlet-box">
+            <div className="pamphlet-box pamphlet-rules-box">
               <h3>Match Rules</h3>
               <ul>
                 {textLines(draft.rules).map((line) => <li key={line}>{line}</li>)}
               </ul>
             </div>
           </div>
-          <div className="pamphlet-prize-strip">
-            <div><span>Entry Fee</span><strong>Rs {draft.entryFee || 0}</strong></div>
-            <Trophy size={88} />
-            <div><span>Registered</span><strong>{registeredPlayers}</strong></div>
+        </section>
+
+        {teamPages.map((pageTeams, pageIndex) => {
+          return (
+            <section
+              key={`teams-${pageIndex}`}
+              className={classNames(
+                'pamphlet-poster pamphlet-format pamphlet-team-list',
+                activePoolLabels().length === 4 && 'four-pool-team-list'
+              )}
+            >
+              <div className="pamphlet-page-number">
+                Page {pageIndex + 2} - Team List{teamPages.length > 1 ? ` ${pageIndex + 1}` : ''}
+              </div>
+              <div className="pamphlet-title-lockup compact pamphlet-secondary-header">
+                <Crown size={30} />
+                <h1>{draft.title}</h1>
+                <strong>{draft.subtitle}</strong>
+                <span>{draft.cupLine}</span>
+                <div className="pamphlet-venue pamphlet-compact-venue">
+                  <MapPin size={16} />
+                  <b>{draft.venue}</b>
+                </div>
+              </div>
+              {isPoolSchedule() ? renderPoolTeamColumns(true, pageTeams) : (
+                <div className="pamphlet-logo-grid">
+                  {pageTeams.map((team) => (
+                    <div key={team.id} className="pamphlet-team-logo" style={teamColorStyle(team)}>
+                      {team.logo_url ? <img src={team.logo_url} alt={`${team.team_name} logo`} /> : <Shield size={42} />}
+                      <strong>{team.team_name}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <footer>{draft.footer}</footer>
+            </section>
+          );
+        })}
+
+        <section className="pamphlet-poster pamphlet-format pamphlet-format-details">
+          <div className="pamphlet-page-number">Page {formatPageNumber} - Format & Prizes</div>
+          <div className="pamphlet-title-lockup compact pamphlet-secondary-header">
+            <Trophy size={34} />
+            <h1>{draft.title}</h1>
+            <strong>{draft.subtitle}</strong>
+            <span>{draft.cupLine}</span>
+            <div className="pamphlet-venue pamphlet-compact-venue">
+              <MapPin size={16} />
+              <b>{draft.venue}</b>
+            </div>
+          </div>
+          <div className="pamphlet-info-panel">
+            <h3>Tournament Format</h3>
+            <ul>
+              {textLines(draft.format).map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          </div>
+          <div className="pamphlet-prize-cards pamphlet-featured-prizes">
+            <div className="first-prize">
+              <Trophy aria-hidden="true" />
+              <span>1st Prize</span>
+              <strong>Rs {draft.firstPrize || 0}</strong>
+            </div>
+            <div className="second-prize">
+              <Crown aria-hidden="true" />
+              <span>2nd Prize</span>
+              <strong>Rs {draft.secondPrize || 0}</strong>
+            </div>
           </div>
           <div className="pamphlet-award-row">
             {renderAwards()}
@@ -4338,20 +5023,20 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
           <footer>{draft.footer}</footer>
         </section>
 
-        {schedulePages.map((pageRows, pageIndex) => {
-          const isLastPage = pageIndex === schedulePages.length - 1;
+        {visibleSchedulePages.map((pageRows, pageIndex) => {
+          const isLastPage = pageIndex === visibleSchedulePages.length - 1;
           return (
             <section key={`schedule-${pageIndex}`} className="pamphlet-poster pamphlet-schedule">
-              <div className="pamphlet-page-number">Match Schedule - Page {pageIndex + 1} / {schedulePages.length}</div>
-              <div className="pamphlet-title-lockup compact">
-                <Crown size={30} />
-                <h1>{draft.title}</h1>
-                <strong>{draft.startLine}</strong>
-              </div>
-              <div className="pamphlet-schedule-summary">
-                <span>{draft.scheduleMode === 'pools' ? '2 Pool League' : 'Single League / Round Robin'}</span>
-                <span>{leaguePairs().length} League Matches</span>
-                <span>{generatedScheduleRows.length} Total Matches</span>
+              <div className="pamphlet-schedule-heading">
+                {pageIndex === 0 && poolLeagueSummary && (
+                  <div className="pamphlet-league-summary">
+                    <span>{poolLeagueSummary.total} League Matches</span>
+                    <span>Each Team {poolLeagueSummary.perTeam} Matches</span>
+                  </div>
+                )}
+                <div className="pamphlet-page-number">
+                  Page {scheduleStartPageNumber + pageIndex} - Match Schedule Page {pageIndex + 1}
+                </div>
               </div>
               <table className="pamphlet-schedule-table">
                 <thead>
@@ -4374,13 +5059,34 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
                         {row.type === 'league' ? (
                           <div className="pamphlet-matchup">
                             {row.poolLabel && (
-                              <span className={classNames('pamphlet-pool-label', row.poolLabel.includes('B') && 'pool-b')}>
+                              <span className={classNames(
+                                'pamphlet-pool-label',
+                                row.poolLabel.includes('B') && 'pool-b',
+                                row.poolLabel.includes('C') && 'pool-c',
+                                row.poolLabel.includes('D') && 'pool-d'
+                              )}>
                                 {row.poolLabel}
                               </span>
                             )}
                             <span className="pamphlet-match-team" style={teamColorStyle(row.teamA)}>{row.teamA.team_name}</span>
                             <b>vs</b>
                             <span className="pamphlet-match-team" style={teamColorStyle(row.teamB)}>{row.teamB.team_name}</span>
+                          </div>
+                        ) : (row.type === 'knockout' || row.type === 'group-knockout') && (row.teamA || row.teamB) ? (
+                          <div className="pamphlet-matchup">
+                            {row.poolLabel && (
+                              <span className={classNames(
+                                'pamphlet-pool-label',
+                                row.poolLabel.includes('B') && 'pool-b',
+                                row.poolLabel.includes('C') && 'pool-c',
+                                row.poolLabel.includes('D') && 'pool-d'
+                              )}>
+                                {row.poolLabel}
+                              </span>
+                            )}
+                            <span className="pamphlet-match-team" style={row.teamA ? teamColorStyle(row.teamA) : undefined}>{row.teamA?.team_name || 'Bye'}</span>
+                            <b>vs</b>
+                            <span className="pamphlet-match-team" style={row.teamB ? teamColorStyle(row.teamB) : undefined}>{row.teamB?.team_name || 'Bye'}</span>
                           </div>
                         ) : (
                           <strong className="pamphlet-playoff-match">{row.match}</strong>
@@ -4390,65 +5096,74 @@ function TournamentPamphlet({ tournament, settings, teams, players, editable = t
                   ))}
                 </tbody>
               </table>
-              <div className="pamphlet-playoff-band">{isLastPage ? 'Playoffs' : `Continued on Page ${pageIndex + 2}`}</div>
+              <div className="pamphlet-playoff-band">
+                {isLastPage
+                  ? draft.scheduleMode === 'knockout' ? 'Knockout Stage' : 'Playoffs'
+                  : `Continued on Page ${scheduleStartPageNumber + pageIndex + 1}`}
+              </div>
               {isLastPage && <div className="pamphlet-slogan">Same Ground, Same Passion, A New Champion</div>}
               <footer>Cricket Today, Better Tomorrow</footer>
             </section>
           );
         })}
 
-        {teamPages.map((pageTeams, pageIndex) => {
-          const wideTeamPage = activeTeams.length >= 8;
-          return (
-            <section
-              key={`teams-${pageIndex}`}
-              className={classNames('pamphlet-poster pamphlet-format', wideTeamPage && 'wide-team-poster')}
-            >
-              <div className="pamphlet-page-number">Team List - Page {pageIndex + 1} / {teamPages.length}</div>
-              <div className="pamphlet-title-lockup compact">
-                <Crown size={30} />
-                <h1>{draft.title}</h1>
-                <strong>Team List & Tournament Format</strong>
+        {draft.scheduleMode === 'groupKnockout4' && groupKnockoutData.groupRounds.map((group) => (
+          <section key={`group-knockout-${group.label}`} className={classNames('pamphlet-poster pamphlet-format group-knockout-poster', group.className)}>
+            <div className="pamphlet-page-number">
+              Page {groupKnockoutStartPageNumber + groupKnockoutData.groupRounds.findIndex((item) => item.label === group.label)} - Group {group.label} Knockout Bracket
+            </div>
+            <div className="pamphlet-title-lockup compact">
+              <Trophy size={32} />
+              <h1>{draft.title}</h1>
+              <strong>Group {group.label} - 8 Team Knockout</strong>
+            </div>
+            <div className="group-knockout-layout">
+              <div className="group-knockout-column">
+                <h3>Quarter Final</h3>
+                {group.matches.filter((match) => match.shortRound === 'Quarter Final').map((match, index) => (
+                  <div key={`${group.label}-qf-${index}`} className="group-knockout-match">
+                    <small>QF {index + 1}</small>
+                    <span style={match.teamA ? teamColorStyle(match.teamA) : undefined}>{match.teamA?.team_name || 'Bye'}</span>
+                    <b>vs</b>
+                    <span style={match.teamB ? teamColorStyle(match.teamB) : undefined}>{match.teamB?.team_name || 'Bye'}</span>
+                  </div>
+                ))}
               </div>
-              {draft.scheduleMode === 'pools' ? renderPoolTeamColumns(true, pageTeams) : (
-                <div className="pamphlet-logo-grid">
-                  {pageTeams.map((team) => (
-                    <div key={team.id} className="pamphlet-team-logo" style={teamColorStyle(team)}>
-                      {team.logo_url ? <img src={team.logo_url} alt={`${team.team_name} logo`} /> : <Shield size={42} />}
-                      <strong>{team.team_name}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <footer>{draft.footer}</footer>
-            </section>
-          );
-        })}
+              <div className="group-knockout-column">
+                <h3>Semi Final</h3>
+                <div className="group-knockout-match placeholder"><small>SF 1</small><span>Winner QF 1</span><b>vs</b><span>Winner QF 2</span></div>
+                <div className="group-knockout-match placeholder"><small>SF 2</small><span>Winner QF 3</span><b>vs</b><span>Winner QF 4</span></div>
+              </div>
+              <div className="group-knockout-column final-column">
+                <h3>Group Final</h3>
+                <div className="group-knockout-match placeholder champion-path"><small>Final</small><span>Winner SF 1</span><b>vs</b><span>Winner SF 2</span></div>
+                <div className="group-winner-badge">Group {group.label} Winner</div>
+              </div>
+            </div>
+            <footer>Group {group.label} winner final stage me qualify karega</footer>
+          </section>
+        ))}
 
-        <section className="pamphlet-poster pamphlet-format pamphlet-format-details">
-          <div className="pamphlet-page-number">Format & Prizes</div>
-          <div className="pamphlet-title-lockup compact">
-            <Trophy size={34} />
-            <h1>{draft.title}</h1>
-            <strong>Tournament Format & Prizes</strong>
-          </div>
-          <div className="pamphlet-info-panel">
-            <h3>Tournament Format</h3>
-            <ul>
-              {textLines(draft.format).map((line) => <li key={line}>{line}</li>)}
-            </ul>
-          </div>
-          <div className="pamphlet-prize-cards">
-            <div><span>1st Prize</span><strong>Rs {draft.firstPrize || 0}</strong></div>
-            <div><span>2nd Prize</span><strong>Rs {draft.secondPrize || 0}</strong></div>
-            <div><span>Auction Mode</span><strong>{settings.currency_mode}</strong></div>
-            <div><span>Auction Players</span><strong>{auctionPlayers}</strong></div>
-          </div>
-          <div className="pamphlet-award-row">
-            {renderAwards()}
-          </div>
-          <footer>{draft.footer}</footer>
-        </section>
+        {draft.scheduleMode === 'groupKnockout4' && (
+          <section className="pamphlet-poster pamphlet-format group-knockout-poster final-stage-poster">
+            <div className="pamphlet-page-number">
+              Page {groupKnockoutStartPageNumber + groupKnockoutData.groupRounds.length} - Final Stage
+            </div>
+            <div className="pamphlet-title-lockup compact">
+              <Crown size={34} />
+              <h1>{draft.title}</h1>
+              <strong>Group Winners Final Stage</strong>
+            </div>
+            <div className="final-stage-grid">
+              <div className="group-knockout-match placeholder"><small>Semi Final 1</small><span>Group A Winner</span><b>vs</b><span>Group B Winner</span></div>
+              <div className="group-knockout-match placeholder"><small>Semi Final 2</small><span>Group C Winner</span><b>vs</b><span>Group D Winner</span></div>
+              <div className="group-knockout-match placeholder champion-path"><small>Grand Final</small><span>Winner SF 1</span><b>vs</b><span>Winner SF 2</span></div>
+            </div>
+            <div className="pamphlet-slogan">One Champion From Four Groups</div>
+            <footer>Group Knockout Format - 31 Total Matches</footer>
+          </section>
+        )}
+
       </div>
 
       <section className="pamphlet-a4 legacy-pamphlet">
@@ -4574,6 +5289,7 @@ function LiveAuctionAdmin({
   teams,
   players,
   logs,
+  ownerPasses = [],
   currentPlayer,
   highestTeam,
   setMessage,
@@ -4586,6 +5302,12 @@ function LiveAuctionAdmin({
   const [bidAmount, setBidAmount] = useState('');
   const [criteriaFilter, setCriteriaFilter] = useState('');
   const availablePlayers = players.filter((player) => player.sold_status !== 'Sold');
+  const soldPlayerCount = players.filter((player) => player.sold_status === 'Sold').length;
+  const auctionProgressPercent = players.length ? Math.floor((soldPlayerCount / players.length) * 100) : 0;
+  const currentPlayerPasses = ownerPasses.filter((pass) => pass.player_id === currentPlayer?.id);
+  const passedTeamNames = currentPlayerPasses
+    .map((pass) => pass.teams?.team_name || teams.find((team) => team.id === pass.team_id)?.team_name)
+    .filter(Boolean);
   const criteriaOptions = useMemo(() => {
     const values = availablePlayers
       .map((player) => playerCriteria(player))
@@ -4606,6 +5328,17 @@ function LiveAuctionAdmin({
     setBidAmount(minimum ? String(settings.current_highest_team_id ? minimum + bidIncrement : minimum) : '');
   }, [settings.current_player_id, settings.current_highest_team_id, settings.current_bid_amount, players]);
 
+  useEffect(() => {
+    if (!selectedTournamentId || !players.length) return;
+    const crossedThreshold = [...auctionProgressThresholds].reverse().find((threshold) => {
+      const key = `pas-auction-progress-${selectedTournamentId}-${threshold}`;
+      return auctionProgressPercent >= threshold && !localStorage.getItem(key);
+    });
+    if (!crossedThreshold) return;
+    localStorage.setItem(`pas-auction-progress-${selectedTournamentId}-${crossedThreshold}`, '1');
+    setMessage(`Auction ${crossedThreshold}% complete: ${soldPlayerCount}/${players.length} players ka auction ho gaya hai.`);
+  }, [auctionProgressPercent, players.length, selectedTournamentId, soldPlayerCount, setMessage]);
+
   function selectAuctionPlayer(playerId) {
     const player = players.find((item) => item.id === Number(playerId));
     setSelectedPlayerId(playerId);
@@ -4623,6 +5356,15 @@ function LiveAuctionAdmin({
   async function startAuction() {
     const player = players.find((item) => item.id === Number(selectedPlayerId));
     if (!player) return setMessage('Select a player first.');
+
+    const { error: passClearError } = await supabase
+      .from('owner_passes')
+      .delete()
+      .eq('tournament_id', selectedTournamentId)
+      .eq('player_id', player.id);
+    if (passClearError) {
+      return setMessage(`Purane pass clear nahi hue. Supabase SQL Editor me database/add-global-config-and-owner-pass.sql run karo. Detail: ${passClearError.message}`);
+    }
 
     const openingBid = Math.max(toNumber(player.base_price), toNumber(bidAmount));
     const { error: playerError } = await supabase
@@ -4793,6 +5535,31 @@ function LiveAuctionAdmin({
           )}
         </div>
 
+        <div className="auction-progress-panel">
+          <div>
+            <span>Auction Progress</span>
+            <strong>{soldPlayerCount}/{players.length} Players</strong>
+          </div>
+          <div className="auction-progress-track">
+            <span style={{ width: `${Math.min(100, auctionProgressPercent)}%` }} />
+          </div>
+          <b>{auctionProgressPercent}%</b>
+        </div>
+
+        <div className="pass-team-panel">
+          <div className="section-title">
+            <X size={18} />
+            <h2>Passed Teams</h2>
+          </div>
+          {passedTeamNames.length ? (
+            <div className="pass-team-list">
+              {passedTeamNames.map((teamName) => <span key={teamName}>{teamName}</span>)}
+            </div>
+          ) : (
+            <p className="empty-text">Abhi kisi team ne pass nahi kiya.</p>
+          )}
+        </div>
+
         <div className="control-grid">
           <label>
             Criteria
@@ -4862,10 +5629,12 @@ function LiveAuctionAdmin({
   );
 }
 
-function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage }) {
+function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage, loadAll }) {
   const [form, setForm] = useState(blankTeam);
   const [editingTeamId, setEditingTeamId] = useState(null);
   const [ownerPins, setOwnerPins] = useState({});
+  const [topupForm, setTopupForm] = useState({ team_id: 'all', amount: '' });
+  const [backupBusy, setBackupBusy] = useState(false);
   const teamLimit = toNumber(settings.team_count, defaultTeamLimit);
   const teamsRemaining = Math.max(0, teamLimit - teams.length);
 
@@ -4968,6 +5737,160 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
     return true;
   }
 
+  function downloadTeamsBackup() {
+    const backup = {
+      type: 'pas-teams-backup',
+      version: 1,
+      tournament_id: selectedTournamentId,
+      exported_at: new Date().toISOString(),
+      teams: teams.map((team) => ({
+        team_name: team.team_name,
+        owner_name: team.owner_name,
+        owner_mobile: team.owner_mobile || '',
+        owner_pin: ownerPins[team.id] || '',
+        total_budget: toNumber(team.total_budget),
+        remaining_budget: calculatedTeamRemaining(team, players),
+        max_players: toNumber(team.max_players, defaultTeamLimit),
+        current_player_count: calculatedTeamPlayerCount(team, players),
+        group_name: team.group_name || '',
+        budget_topup_count: teamBudgetTopupCount(team),
+        budget_topup_history: teamBudgetTopupHistory(team)
+      }))
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `pas-tournament-${selectedTournamentId || 'teams'}-teams-backup.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    setMessage(`${teams.length} teams ka backup download ho gaya.`);
+  }
+
+  async function restoreTeamsBackup(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBackupBusy(true);
+
+    try {
+      const parsed = JSON.parse(await file.text());
+      const backupTeams = Array.isArray(parsed) ? parsed : parsed?.teams;
+      if (!Array.isArray(backupTeams) || !backupTeams.length) {
+        throw new Error('Valid PAS teams backup file select karo.');
+      }
+
+      const normalizedByName = new Map();
+      backupTeams.forEach((item) => {
+        const teamName = titleCase(item?.team_name).trim();
+        if (!teamName) return;
+        const ownerMobile = digitsOnly(item?.owner_mobile);
+        const ownerPin = numericText(item?.owner_pin);
+        const rawHistory = Array.isArray(item?.budget_topup_history)
+          ? item.budget_topup_history
+          : parseStats(item?.budget_topup_history);
+        normalizedByName.set(teamName.toLowerCase(), {
+          team_name: teamName,
+          owner_name: titleCase(item?.owner_name).trim() || 'Team Owner',
+          owner_mobile: ownerMobile.length === 10 ? ownerMobile : null,
+          owner_pin: ownerPin.length >= 4 ? ownerPin.slice(0, 8) : ownerMobile.slice(-4),
+          total_budget: Math.max(0, toNumber(item?.total_budget)),
+          remaining_budget: Math.max(0, toNumber(item?.remaining_budget, item?.total_budget)),
+          max_players: Math.max(1, toNumber(item?.max_players, defaultTeamLimit)),
+          current_player_count: Math.max(0, toNumber(item?.current_player_count)),
+          group_name: groupLabels.includes(String(item?.group_name || '').toUpperCase())
+            ? String(item.group_name).toUpperCase()
+            : null,
+          budget_topup_count: Math.max(0, toNumber(item?.budget_topup_count)),
+          budget_topup_history: Array.isArray(rawHistory) ? rawHistory : []
+        });
+      });
+
+      const restoreRows = Array.from(normalizedByName.values());
+      if (!restoreRows.length) throw new Error('Backup me valid team data nahi mila.');
+      const existingNames = new Set(teams.map((team) => String(team.team_name || '').trim().toLowerCase()));
+      const newTeamCount = restoreRows.filter((team) => !existingNames.has(team.team_name.toLowerCase())).length;
+      if (teams.length + newTeamCount > teamLimit) {
+        throw new Error(`Backup restore ke liye team limit ${teams.length + newTeamCount} karo. Abhi limit ${teamLimit} hai.`);
+      }
+
+      const confirmed = window.confirm(`${restoreRows.length} teams restore karni hain? Same name wali teams update hongi aur missing teams add hongi.`);
+      if (!confirmed) return;
+
+      for (const row of restoreRows) {
+        const existingTeam = teams.find((team) => String(team.team_name || '').trim().toLowerCase() === row.team_name.toLowerCase());
+        const { owner_pin: ownerPin, ...teamPayload } = row;
+        const query = existingTeam
+          ? supabase.from('teams').update(teamPayload).eq('id', existingTeam.id).select('id').single()
+          : supabase.from('teams').insert({ tournament_id: selectedTournamentId, ...teamPayload }).select('id').single();
+        const { data, error } = await query;
+        if (error) throw error;
+        const teamId = data?.id || existingTeam?.id;
+        if (ownerPin?.length >= 4 && teamId) {
+          const { error: pinError } = await supabase
+            .from('team_owner_credentials')
+            .upsert({ team_id: teamId, owner_pin: ownerPin }, { onConflict: 'team_id' });
+          if (pinError) throw pinError;
+        }
+      }
+
+      await loadAll?.();
+      setMessage(`${restoreRows.length} teams restore ho gayi.`);
+    } catch (error) {
+      setMessage(`Teams restore nahi hua. ${formatSaveError(error)}`);
+    } finally {
+      setBackupBusy(false);
+      event.target.value = '';
+    }
+  }
+
+  async function applyBudgetTopup(event) {
+    event.preventDefault();
+    const amount = toNumber(topupForm.amount);
+    if (amount <= 0) return setMessage('Top-up amount 0 se jyada hona chahiye.');
+    const targetTeams = topupForm.team_id === 'all'
+      ? teams
+      : teams.filter((team) => team.id === Number(topupForm.team_id));
+    if (!targetTeams.length) return setMessage('Top-up ke liye team select karo.');
+
+    const eligibleTeams = targetTeams.filter((team) => teamBudgetTopupCount(team) < maxTeamBudgetTopups);
+    if (!eligibleTeams.length) return setMessage(`Selected team(s) me ${maxTeamBudgetTopups} top-up already ho chuke hain.`);
+    const confirmed = window.confirm(`${eligibleTeams.length} team(s) ke total budget me ${formatMoney(amount, settings.currency_mode)} add karna hai?`);
+    if (!confirmed) return;
+
+    try {
+      for (const team of eligibleTeams) {
+        const history = teamBudgetTopupHistory(team);
+        const nextHistory = [
+          ...history,
+          {
+            amount,
+            at: new Date().toISOString(),
+            mode: topupForm.team_id === 'all' ? 'all_teams' : 'single_team'
+          }
+        ];
+        const { error } = await supabase
+          .from('teams')
+          .update({
+            total_budget: toNumber(team.total_budget) + amount,
+            remaining_budget: calculatedTeamRemaining(team, players) + amount,
+            budget_topup_count: teamBudgetTopupCount(team) + 1,
+            budget_topup_history: nextHistory
+          })
+          .eq('id', team.id);
+        if (error) throw error;
+      }
+      setTopupForm({ team_id: 'all', amount: '' });
+      await loadAll?.();
+      setMessage(`${eligibleTeams.length} team(s) ka budget top-up ho gaya.`);
+    } catch (error) {
+      const rawMessage = `${error?.message || error || ''}`;
+      if (rawMessage.toLowerCase().includes('budget_topup')) {
+        setMessage(`Budget top-up columns missing. Supabase SQL Editor me database/add-team-budget-topup.sql run karo. Detail: ${rawMessage}`);
+        return;
+      }
+      setMessage(formatSaveError(error));
+    }
+  }
+
   return (
     <div className="two-column">
       <form className="panel form-panel" onSubmit={saveTeam}>
@@ -5040,7 +5963,66 @@ function TeamsAdmin({ teams, players, settings, selectedTournamentId, setMessage
         </div>
       </form>
 
-      <TeamTable teams={teams} players={players} settings={settings} onEdit={editTeam} onDelete={deleteTeam} onBulkDelete={deleteSelectedTeams} />
+      <div className="stack">
+        <section className="panel import-panel team-backup-panel">
+          <div className="section-title">
+            <Download size={20} />
+            <h2>Teams Backup & Restore</h2>
+          </div>
+          <p>Selected tournament ki teams, owner login PIN, purse, pool aur top-up history JSON backup me save hogi.</p>
+          <div className="button-row">
+            <button type="button" className="accent-button" onClick={downloadTeamsBackup} disabled={!teams.length || backupBusy}>
+              <Download size={18} /> Download Backup
+            </button>
+            <label className="file-button">
+              <Upload size={18} /> {backupBusy ? 'Restoring...' : 'Restore Backup'}
+              <input type="file" accept=".json,application/json" onChange={restoreTeamsBackup} disabled={backupBusy} />
+            </label>
+          </div>
+          <p className="empty-text">Backup file me owner PIN hota hai. File ko private aur safe jagah rakhein.</p>
+        </section>
+
+        <section className="panel form-panel budget-topup-panel">
+          <div className="section-title">
+            <BadgeIndianRupee size={20} />
+            <h2>Budget Top-Up / Add-On</h2>
+          </div>
+          <form className="topup-form" onSubmit={applyBudgetTopup}>
+            <label>
+              Apply To
+              <select value={topupForm.team_id} onChange={(e) => setTopupForm({ ...topupForm, team_id: e.target.value })}>
+                <option value="all">All Teams</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.team_name} ({teamBudgetTopupCount(team)}/{maxTeamBudgetTopups})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Top-Up Amount
+              <input
+                inputMode="numeric"
+                value={topupForm.amount}
+                onChange={(e) => setTopupForm({ ...topupForm, amount: numericText(e.target.value) })}
+                placeholder="Amount"
+                required
+              />
+            </label>
+            <button className="accent-button">
+              <Plus size={18} /> Add Budget
+            </button>
+          </form>
+          <p className="empty-text">Har team ke liye maximum {maxTeamBudgetTopups} budget top-up count track hoga.</p>
+          <div className="topup-count-list">
+            {teams.map((team) => (
+              <span key={team.id}>{team.team_name}: {teamBudgetTopupCount(team)}/{maxTeamBudgetTopups}</span>
+            ))}
+          </div>
+        </section>
+
+        <TeamTable teams={teams} players={players} settings={settings} onEdit={editTeam} onDelete={deleteTeam} onBulkDelete={deleteSelectedTeams} />
+      </div>
     </div>
   );
 }
@@ -5506,14 +6488,6 @@ function PlayersAdmin({ tournament, players, teams, settings, selectedTournament
               <ListChecks size={20} />
               <h2>Players Table</h2>
             </div>
-            <div className="button-row">
-              <button className="accent-button" onClick={downloadPlayersList} disabled={!players.length}>
-                <Download size={18} /> Download Players List
-              </button>
-              <button className="primary-button" onClick={openAddForm}>
-                <Plus size={18} /> Add New Player
-              </button>
-            </div>
           </div>
 
           <section className="panel import-panel">
@@ -5606,6 +6580,8 @@ function PlayersAdmin({ tournament, players, teams, settings, selectedTournament
             onEdit={editPlayer}
             onDelete={deletePlayer}
             onBulkDelete={deleteSelectedPlayers}
+            onDownloadPlayers={downloadPlayersList}
+            onAddPlayer={openAddForm}
             onMessageMarked={loadAll}
           />
         </>
@@ -5794,6 +6770,8 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
   const [balls, setBalls] = useState([]);
   const [activeMatchId, setActiveMatchId] = useState('');
   const [busy, setBusy] = useState(false);
+  const [scoringNotice, setScoringNotice] = useState('');
+  const [lastScoreAction, setLastScoreAction] = useState('');
   const [matchForm, setMatchForm] = useState({
     match_title: '',
     venue: '',
@@ -5822,6 +6800,8 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
       setBalls([]);
       return;
     }
+    setScoringNotice('');
+    setLastScoreAction('');
     loadBalls(activeMatchId);
   }, [activeMatchId]);
 
@@ -6009,12 +6989,25 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
     setMessage('Match scoring start ho gaya.');
   }
 
-  async function addDelivery({ runs = 0, extraType = '', extraRuns = 0, wicketType = '', wicketPlayerId = null }) {
+  async function addDelivery({ runs = 0, extraType = '', extraRuns = 0, wicketType = '', wicketPlayerId = null, actionKey = '' }) {
     if (!canEdit) return setMessage('Scoring update ke liye admin login required hai.');
     if (!activeMatch) return setMessage('Pehle match create/select karo.');
     if (activeMatch.status === 'Completed') return setMessage('Completed match me scoring update nahi hogi.');
-    if (!scoreForm.striker_id || !scoreForm.bowler_id) return setMessage('Striker aur bowler select karo.');
-    const legalBalls = currentSummary.legalBalls + (extraType === 'Wide' || extraType === 'No Ball' ? 0 : 1);
+    if (!scoreForm.striker_id || !scoreForm.non_striker_id || !scoreForm.bowler_id) {
+      setScoringNotice('Striker, non-striker aur bowler select karne ke baad hi agli ball count hogi.');
+      return setMessage('Striker, non-striker aur bowler select karo.');
+    }
+    if (scoreForm.striker_id === scoreForm.non_striker_id) {
+      setScoringNotice('Striker aur non-striker alag players hone chahiye.');
+      return setMessage('Striker aur non-striker alag players select karo.');
+    }
+    const isLegalBall = extraType !== 'Wide' && extraType !== 'No Ball';
+    const previousLegalBall = [...currentInningsBalls].reverse().find((ball) => ball.extra_type !== 'Wide' && ball.extra_type !== 'No Ball');
+    if (currentSummary.legalBalls > 0 && currentBall === 0 && Number(scoreForm.bowler_id) === Number(previousLegalBall?.bowler_id)) {
+      setScoringNotice('Over complete hai. Next over ke liye pichhle over se alag bowler select karo.');
+      return setMessage('Next over ke liye naya bowler select karo.');
+    }
+    const legalBalls = currentSummary.legalBalls + (isLegalBall ? 1 : 0);
     if (legalBalls > toNumber(activeMatch.overs_limit, 0) * 6) return setMessage('Overs limit complete ho chuki hai.');
 
     const payload = {
@@ -6038,16 +7031,42 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
     const { error } = await supabase.from('score_balls').insert(payload);
     if (error) return setMessage(friendlyScoringError(error));
+    setLastScoreAction(actionKey);
 
-    if ((!extraType && runs % 2 === 1) || (legalBalls % 6 === 0 && legalBalls > currentSummary.legalBalls)) {
-      setScoreForm((current) => ({
+    const overCompleted = isLegalBall && legalBalls > currentSummary.legalBalls && legalBalls % 6 === 0;
+    const runningRuns = toNumber(runs) + (['Bye', 'Leg Bye'].includes(extraType) ? toNumber(extraRuns) : 0);
+    const swapForRuns = runningRuns % 2 === 1;
+    const shouldSwapEnds = swapForRuns !== overCompleted;
+    const dismissedPlayerId = wicketType ? Number(wicketPlayerId || scoreForm.striker_id) : null;
+
+    setScoreForm((current) => {
+      let nextStrikerId = shouldSwapEnds ? current.non_striker_id : current.striker_id;
+      let nextNonStrikerId = shouldSwapEnds ? current.striker_id : current.non_striker_id;
+
+      if (dismissedPlayerId && Number(nextStrikerId) === dismissedPlayerId) nextStrikerId = '';
+      if (dismissedPlayerId && Number(nextNonStrikerId) === dismissedPlayerId) nextNonStrikerId = '';
+
+      return {
         ...current,
-        striker_id: current.non_striker_id,
-        non_striker_id: current.striker_id,
+        striker_id: nextStrikerId,
+        non_striker_id: nextNonStrikerId,
+        bowler_id: overCompleted ? '' : current.bowler_id,
+        wicket_player_id: '',
         notes: ''
-      }));
+      };
+    });
+
+    if (wicketType && overCompleted) {
+      setScoringNotice('Wicket aur over complete. Naya batter aur next over ka naya bowler select karo; tab tak ball count nahi hogi.');
+      setMessage('Wicket! Naya batter aur next over ka bowler select karo.');
+    } else if (wicketType) {
+      setScoringNotice('Wicket hua. Out player ki jagah naya batter select karo; tab tak agli ball count nahi hogi.');
+      setMessage('Wicket! Agli ball se pehle naya batter select karo.');
+    } else if (overCompleted) {
+      setScoringNotice('Over complete. Next over ke liye pichhle over se alag bowler select karo.');
+      setMessage('Over complete. Naya bowler select karo.');
     } else {
-      setScoreForm((current) => ({ ...current, notes: '' }));
+      setScoringNotice('');
     }
     await loadBalls(activeMatch.id);
   }
@@ -6058,8 +7077,19 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
     if (!lastBall) return setMessage('Undo ke liye ball record nahi mila.');
     const { error } = await supabase.from('score_balls').delete().eq('id', lastBall.id);
     if (error) return setMessage(friendlyScoringError(error));
+    setScoreForm((current) => ({
+      ...current,
+      striker_id: lastBall.striker_id ? String(lastBall.striker_id) : '',
+      non_striker_id: lastBall.non_striker_id ? String(lastBall.non_striker_id) : '',
+      bowler_id: lastBall.bowler_id ? String(lastBall.bowler_id) : '',
+      wicket_type: lastBall.wicket_type || current.wicket_type,
+      wicket_player_id: '',
+      notes: lastBall.notes || ''
+    }));
+    setScoringNotice('Undo complete. Striker, non-striker aur bowler pichhli ball wali position par restore ho gaye.');
+    setLastScoreAction('undo');
     await loadBalls(activeMatch.id);
-    setMessage('Last ball undo ho gayi.');
+    setMessage('Last ball undo ho gayi; players aur bowler restore ho gaye.');
   }
 
   async function closeOrNextInnings() {
@@ -6078,6 +7108,8 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
         .eq('id', activeMatch.id);
       if (error) return setMessage(friendlyScoringError(error));
       setScoreForm({ striker_id: '', non_striker_id: '', bowler_id: '', wicket_type: 'Bowled', wicket_player_id: '', notes: '' });
+      setScoringNotice('Second innings ke liye striker, non-striker aur bowler select karo.');
+      setLastScoreAction('');
       await loadMatches();
       setMessage(`Second innings start. Target ${firstSummary.totalRuns + 1}.`);
       return;
@@ -6091,6 +7123,12 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
   const battingRoster = teamPlayers(activeMatch?.batting_team_id);
   const bowlingRoster = teamPlayers(activeMatch?.bowling_team_id);
+  const dismissedPlayerIds = new Set(
+    currentInningsBalls
+      .filter((ball) => ball.wicket_type && ball.wicket_player_id)
+      .map((ball) => Number(ball.wicket_player_id))
+  );
+  const availableBattingRoster = battingRoster.filter((player) => !dismissedPlayerIds.has(player.id));
 
   return (
     <div className="stack match-scoring-screen">
@@ -6149,19 +7187,20 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
           {canEdit && activeMatch && (
             <div className="scoring-controls">
+              {scoringNotice && <div className="scoring-notice" role="status">{scoringNotice}</div>}
               <div className="control-grid">
                 <label>
                   Striker
                   <select value={scoreForm.striker_id} onChange={(e) => updateScoreForm('striker_id', e.target.value)}>
                     <option value="">Select striker</option>
-                    {battingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
+                    {availableBattingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
                   </select>
                 </label>
                 <label>
                   Non Striker
                   <select value={scoreForm.non_striker_id} onChange={(e) => updateScoreForm('non_striker_id', e.target.value)}>
                     <option value="">Select non striker</option>
-                    {battingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
+                    {availableBattingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
                   </select>
                 </label>
                 <label>
@@ -6175,17 +7214,22 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
               <div className="run-pad" aria-label="Run buttons">
                 {[0, 1, 2, 3, 4, 6].map((run) => (
-                  <button type="button" className="score-run-button" key={run} onClick={() => addDelivery({ runs: run })}>
+                  <button
+                    type="button"
+                    className={classNames('score-run-button', lastScoreAction === `run-${run}` && 'score-action-active')}
+                    key={run}
+                    onClick={() => addDelivery({ runs: run, actionKey: `run-${run}` })}
+                  >
                     {run}
                   </button>
                 ))}
               </div>
 
               <div className="button-row score-extra-row">
-                <button type="button" className="accent-button small" onClick={() => addDelivery({ extraType: 'Wide', extraRuns: 1 })}>Wide +1</button>
-                <button type="button" className="accent-button small" onClick={() => addDelivery({ extraType: 'No Ball', extraRuns: 1 })}>No Ball +1</button>
-                <button type="button" className="ghost-button inline small" onClick={() => addDelivery({ extraType: 'Bye', extraRuns: 1 })}>Bye +1</button>
-                <button type="button" className="ghost-button inline small" onClick={() => addDelivery({ extraType: 'Leg Bye', extraRuns: 1 })}>Leg Bye +1</button>
+                <button type="button" className={classNames('accent-button small', lastScoreAction === 'wide' && 'score-action-active')} onClick={() => addDelivery({ extraType: 'Wide', extraRuns: 1, actionKey: 'wide' })}>Wide +1</button>
+                <button type="button" className={classNames('accent-button small', lastScoreAction === 'no-ball' && 'score-action-active')} onClick={() => addDelivery({ extraType: 'No Ball', extraRuns: 1, actionKey: 'no-ball' })}>No Ball +1</button>
+                <button type="button" className={classNames('ghost-button inline small', lastScoreAction === 'bye' && 'score-action-active')} onClick={() => addDelivery({ extraType: 'Bye', extraRuns: 1, actionKey: 'bye' })}>Bye +1</button>
+                <button type="button" className={classNames('ghost-button inline small', lastScoreAction === 'leg-bye' && 'score-action-active')} onClick={() => addDelivery({ extraType: 'Leg Bye', extraRuns: 1, actionKey: 'leg-bye' })}>Leg Bye +1</button>
               </div>
 
               <div className="wicket-row">
@@ -6201,7 +7245,7 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
                   Out Player
                   <select value={scoreForm.wicket_player_id} onChange={(e) => updateScoreForm('wicket_player_id', e.target.value)}>
                     <option value="">Default striker</option>
-                    {battingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
+                    {availableBattingRoster.map((player) => <option key={player.id} value={player.id}>{player.full_name}</option>)}
                   </select>
                 </label>
                 <label>
@@ -6210,11 +7254,12 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
                 </label>
                 <button
                   type="button"
-                  className="danger-button"
+                  className={classNames('danger-button', lastScoreAction === 'wicket' && 'score-action-active')}
                   onClick={() => addDelivery({
                     runs: 0,
                     wicketType: scoreForm.wicket_type,
-                    wicketPlayerId: scoreForm.wicket_player_id || scoreForm.striker_id
+                    wicketPlayerId: scoreForm.wicket_player_id || scoreForm.striker_id,
+                    actionKey: 'wicket'
                   })}
                 >
                   Wicket
@@ -6222,7 +7267,7 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
               </div>
 
               <div className="button-row">
-                <button type="button" className="ghost-button inline" onClick={undoLastBall}>Undo Last Ball</button>
+                <button type="button" className={classNames('ghost-button inline', lastScoreAction === 'undo' && 'score-action-active')} onClick={undoLastBall}>Undo Last Ball</button>
                 <button type="button" className="success-button" onClick={closeOrNextInnings}>
                   {currentInningsNo === 1 ? 'Start Second Innings' : 'Complete Match'}
                 </button>
@@ -6309,7 +7354,7 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
       </div>
 
       <div className="scoring-layout">
-        <section className="panel table-panel">
+        <section className="scorecard-section">
           <div className="section-title">
             <ListChecks size={20} />
             <h2>Scorecard</h2>
@@ -6351,7 +7396,7 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
 function ScorecardTable({ title, rows }) {
   return (
-    <div className="mini-score-table">
+    <div className="mini-score-table scorecard-card batting-scorecard-card">
       <h3>{title}</h3>
       <div className="table-wrap">
         <table>
@@ -6390,7 +7435,7 @@ function ScorecardTable({ title, rows }) {
 
 function BowlingTable({ title, rows }) {
   return (
-    <div className="mini-score-table">
+    <div className="mini-score-table scorecard-card bowling-scorecard-card">
       <h3>{title}</h3>
       <div className="table-wrap">
         <table>
@@ -6513,7 +7558,8 @@ function TeamOwnerDashboard({
   const currentPrice = Math.max(toNumber(settings.current_bid_amount), toNumber(currentPlayer?.base_price));
   const hasHighestBid = Boolean(settings.current_highest_team_id);
   const isHighest = settings.current_highest_team_id === teamId;
-  const hasPassed = ownerPasses.some((pass) => pass.team_id === teamId);
+  const currentPlayerPasses = ownerPasses.filter((pass) => pass.player_id === currentPlayer?.id);
+  const hasPassed = currentPlayerPasses.some((pass) => pass.team_id === teamId);
 
   useEffect(() => {
     if (!currentPlayer) {
@@ -6643,7 +7689,7 @@ function TeamOwnerDashboard({
               {hasPassed ? 'Passed' : 'Pass'}
             </button>
           </form>
-          <p className="pass-note">{ownerPasses.length}/{teams.length} teams pass</p>
+          <p className="pass-note">{currentPlayerPasses.length}/{teams.length} teams pass</p>
         </section>
 
         <section className="panel table-panel owner-team-panel">
@@ -7032,7 +8078,18 @@ function TeamTable({ teams, players = [], settings, compact = false, onEdit, onD
   );
 }
 
-function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete, setMessage, onMessageMarked }) {
+function PlayerTable({
+  players,
+  teams,
+  settings,
+  onEdit,
+  onDelete,
+  onBulkDelete,
+  onDownloadPlayers,
+  onAddPlayer,
+  setMessage,
+  onMessageMarked
+}) {
   const hasActions = Boolean(onEdit || onDelete);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -7182,6 +8239,16 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
           <button type="button" className="danger-button small" onClick={deleteSelected} disabled={!selectedCount}>
             <Trash2 size={15} /> Delete Selected
           </button>
+          {onDownloadPlayers && (
+            <button type="button" className="accent-button small" onClick={onDownloadPlayers} disabled={!players.length}>
+              <Download size={15} /> Download Players List
+            </button>
+          )}
+          {onAddPlayer && (
+            <button type="button" className="primary-button small" onClick={onAddPlayer}>
+              <Plus size={15} /> Add New Player
+            </button>
+          )}
           <label className="search-box">
             <Search size={17} />
             <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search name, mobile, category, criteria" />
@@ -7190,6 +8257,16 @@ function PlayerTable({ players, teams, settings, onEdit, onDelete, onBulkDelete,
       )}
       {!hasActions && (
         <div className="bulk-bar">
+          {onDownloadPlayers && (
+            <button type="button" className="accent-button small" onClick={onDownloadPlayers} disabled={!players.length}>
+              <Download size={15} /> Download Players List
+            </button>
+          )}
+          {onAddPlayer && (
+            <button type="button" className="primary-button small" onClick={onAddPlayer}>
+              <Plus size={15} /> Add New Player
+            </button>
+          )}
           <label className="search-box">
             <Search size={17} />
             <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search name, mobile, category, criteria" />

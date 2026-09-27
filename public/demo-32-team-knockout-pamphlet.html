@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>32 Team Knockout Pamphlet Demo</title>
+  <style>
+    :root {
+      --bg: #06100b;
+      --panel: #0d1d14;
+      --green: #9cff4a;
+      --gold: #f5c542;
+      --text: #f3ffe9;
+      --muted: #b7c9ad;
+      --line: rgba(156, 255, 74, 0.28);
+      --red: #ff5b5b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: radial-gradient(circle at top, rgba(156, 255, 74, 0.13), transparent 34%), var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .toolbar {
+      max-width: 1120px;
+      margin: 0 auto 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .toolbar h1 {
+      margin: 0;
+      font-size: clamp(1.4rem, 3vw, 2.6rem);
+      line-height: 1;
+    }
+
+    .toolbar button {
+      min-height: 42px;
+      padding: 10px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--green), #38e66b);
+      color: #06100b;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .sheet {
+      width: min(1120px, 100%);
+      margin: 0 auto 22px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background:
+        linear-gradient(130deg, rgba(245, 197, 66, 0.16), transparent 36%),
+        linear-gradient(180deg, #0f2418, #050b08);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+      page-break-after: always;
+    }
+
+    .cover {
+      min-height: 794px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 34px;
+      position: relative;
+    }
+
+    .cover::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(156, 255, 74, 0.05) 1px, transparent 1px),
+        linear-gradient(rgba(156, 255, 74, 0.04) 1px, transparent 1px);
+      background-size: 28px 28px;
+      opacity: 0.65;
+      pointer-events: none;
+    }
+
+    .brand-row,
+    .cover-main,
+    .cover-footer {
+      position: relative;
+      z-index: 1;
+    }
+
+    .brand-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .logo {
+      display: grid;
+      width: 76px;
+      height: 76px;
+      place-items: center;
+      border: 3px solid var(--green);
+      border-radius: 999px;
+      background: #07120c;
+      color: var(--green);
+      font-weight: 950;
+      box-shadow: 0 0 24px rgba(156, 255, 74, 0.26);
+    }
+
+    .badge {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--gold);
+      background: rgba(0, 0, 0, 0.22);
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .cover-main {
+      display: grid;
+      align-content: center;
+      gap: 22px;
+      max-width: 760px;
+    }
+
+    .eyebrow {
+      margin: 0;
+      color: var(--green);
+      font-weight: 950;
+      text-transform: uppercase;
+    }
+
+    .cover h2 {
+      margin: 0;
+      font-size: clamp(3rem, 7vw, 6.8rem);
+      line-height: 0.92;
+      letter-spacing: 0;
+    }
+
+    .cover h2 span { color: var(--gold); }
+
+    .cover-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .cover-stat {
+      min-height: 86px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.28);
+    }
+
+    .cover-stat span {
+      display: block;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .cover-stat strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--gold);
+      font-size: 1.35rem;
+    }
+
+    .cover-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 800;
+    }
+
+    .fixture {
+      padding: 28px;
+    }
+
+    .fixture-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      margin-bottom: 18px;
+    }
+
+    .fixture-header h2 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 4rem);
+      line-height: 0.98;
+    }
+
+    .round-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(180px, 1fr));
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+    }
+
+    .round {
+      min-width: 180px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .round-title {
+      position: sticky;
+      top: 0;
+      min-height: 46px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(156, 255, 74, 0.2), rgba(245, 197, 66, 0.14));
+      color: var(--green);
+      font-weight: 950;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .match {
+      display: grid;
+      gap: 6px;
+      padding: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.28);
+    }
+
+    .match small {
+      color: var(--gold);
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .team {
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      font-weight: 850;
+    }
+
+    .team.placeholder {
+      color: var(--muted);
+      border: 1px dashed rgba(255, 255, 255, 0.22);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .team b {
+      color: var(--green);
+      font-size: 0.78rem;
+    }
+
+    .schedule-table {
+      width: 100%;
+      margin-top: 20px;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .schedule-table th,
+    .schedule-table td {
+      padding: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .schedule-table th {
+      color: var(--green);
+      background: rgba(0, 0, 0, 0.28);
+      text-transform: uppercase;
+    }
+
+    @media print {
+      body { padding: 0; background: white; }
+      .toolbar { display: none; }
+      .sheet {
+        width: 297mm;
+        min-height: 210mm;
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .round-grid { overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>32 Team Knockout Demo</h1>
+    <button type="button" onclick="window.print()">Print / Save PDF</button>
+  </div>
+
+  <section class="sheet cover">
+    <div class="brand-row">
+      <div class="logo">CPL</div>
+      <div class="badge">Professional Knockout Pamphlet</div>
+    </div>
+    <div class="cover-main">
+      <p class="eyebrow">Players Auction System</p>
+      <h2>32 Team <span>Knockout</span> Championship</h2>
+      <div class="cover-grid">
+        <div class="cover-stat"><span>Total Teams</span><strong>32</strong></div>
+        <div class="cover-stat"><span>Total Matches</span><strong>31</strong></div>
+        <div class="cover-stat"><span>Start Time</span><strong>7:00 AM</strong></div>
+        <div class="cover-stat"><span>Format</span><strong>Knockout</strong></div>
+      </div>
+    </div>
+    <div class="cover-footer">
+      <span>Venue: Science College Ground, Rajnandgaon</span>
+      <span>Managed By Create Computer</span>
+    </div>
+  </section>
+
+  <section class="sheet fixture">
+    <div class="fixture-header">
+      <div>
+        <p class="eyebrow">Fixture Bracket</p>
+        <h2>Knockout Road To Final</h2>
+      </div>
+      <div class="badge">Round of 32 to Final</div>
+    </div>
+
+    <div class="round-grid">
+      <div class="round">
+        <div class="round-title">Round of 32</div>
+        <div class="match"><small>Match 1</small><div class="team">Team 01 <b>A1</b></div><div class="team">Team 32 <b>A2</b></div></div>
+        <div class="match"><small>Match 2</small><div class="team">Team 16 <b>B1</b></div><div class="team">Team 17 <b>B2</b></div></div>
+        <div class="match"><small>Match 3</small><div class="team">Team 08 <b>C1</b></div><div class="team">Team 25 <b>C2</b></div></div>
+        <div class="match"><small>Match 4</small><div class="team">Team 09 <b>D1</b></div><div class="team">Team 24 <b>D2</b></div></div>
+        <div class="match"><small>Match 5</small><div class="team">Team 04 <b>E1</b></div><div class="team">Team 29 <b>E2</b></div></div>
+        <div class="match"><small>Match 6</small><div class="team">Team 13 <b>F1</b></div><div class="team">Team 20 <b>F2</b></div></div>
+        <div class="match"><small>Match 7</small><div class="team">Team 05 <b>G1</b></div><div class="team">Team 28 <b>G2</b></div></div>
+        <div class="match"><small>Match 8</small><div class="team">Team 12 <b>H1</b></div><div class="team">Team 21 <b>H2</b></div></div>
+        <div class="match"><small>Match 9</small><div class="team">Team 02 <b>I1</b></div><div class="team">Team 31 <b>I2</b></div></div>
+        <div class="match"><small>Match 10</small><div class="team">Team 15 <b>J1</b></div><div class="team">Team 18 <b>J2</b></div></div>
+        <div class="match"><small>Match 11</small><div class="team">Team 07 <b>K1</b></div><div class="team">Team 26 <b>K2</b></div></div>
+        <div class="match"><small>Match 12</small><div class="team">Team 10 <b>L1</b></div><div class="team">Team 23 <b>L2</b></div></div>
+        <div class="match"><small>Match 13</small><div class="team">Team 03 <b>M1</b></div><div class="team">Team 30 <b>M2</b></div></div>
+        <div class="match"><small>Match 14</small><div class="team">Team 14 <b>N1</b></div><div class="team">Team 19 <b>N2</b></div></div>
+        <div class="match"><small>Match 15</small><div class="team">Team 06 <b>O1</b></div><div class="team">Team 27 <b>O2</b></div></div>
+        <div class="match"><small>Match 16</small><div class="team">Team 11 <b>P1</b></div><div class="team">Team 22 <b>P2</b></div></div>
+      </div>
+
+      <div class="round">
+        <div class="round-title">Pre Quarter</div>
+        <div class="match"><small>Match 17</small><div class="team placeholder">Winner M1</div><div class="team placeholder">Winner M2</div></div>
+        <div class="match"><small>Match 18</small><div class="team placeholder">Winner M3</div><div class="team placeholder">Winner M4</div></div>
+        <div class="match"><small>Match 19</small><div class="team placeholder">Winner M5</div><div class="team placeholder">Winner M6</div></div>
+        <div class="match"><small>Match 20</small><div class="team placeholder">Winner M7</div><div class="team placeholder">Winner M8</div></div>
+        <div class="match"><small>Match 21</small><div class="team placeholder">Winner M9</div><div class="team placeholder">Winner M10</div></div>
+        <div class="match"><small>Match 22</small><div class="team placeholder">Winner M11</div><div class="team placeholder">Winner M12</div></div>
+        <div class="match"><small>Match 23</small><div class="team placeholder">Winner M13</div><div class="team placeholder">Winner M14</div></div>
+        <div class="match"><small>Match 24</small><div class="team placeholder">Winner M15</div><div class="team placeholder">Winner M16</div></div>
+      </div>
+
+      <div class="round">
+        <div class="round-title">Quarter Final</div>
+        <div class="match"><small>Match 25</small><div class="team placeholder">Winner M17</div><div class="team placeholder">Winner M18</div></div>
+        <div class="match"><small>Match 26</small><div class="team placeholder">Winner M19</div><div class="team placeholder">Winner M20</div></div>
+        <div class="match"><small>Match 27</small><div class="team placeholder">Winner M21</div><div class="team placeholder">Winner M22</div></div>
+        <div class="match"><small>Match 28</small><div class="team placeholder">Winner M23</div><div class="team placeholder">Winner M24</div></div>
+      </div>
+
+      <div class="round">
+        <div class="round-title">Semi Final</div>
+        <div class="match"><small>Match 29</small><div class="team placeholder">Winner M25</div><div class="team placeholder">Winner M26</div></div>
+        <div class="match"><small>Match 30</small><div class="team placeholder">Winner M27</div><div class="team placeholder">Winner M28</div></div>
+      </div>
+
+      <div class="round">
+        <div class="round-title">Final</div>
+        <div class="match"><small>Match 31</small><div class="team placeholder">Winner M29</div><div class="team placeholder">Winner M30</div></div>
+      </div>
+    </div>
+
+    <table class="schedule-table">
+      <thead>
+        <tr><th>Stage</th><th>Match No.</th><th>Total Matches</th><th>Suggested Timing</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Round of 32</td><td>1 to 16</td><td>16</td><td>Day 1 onward, 4 matches/day</td></tr>
+        <tr><td>Pre Quarter</td><td>17 to 24</td><td>8</td><td>After Round of 32</td></tr>
+        <tr><td>Quarter Final</td><td>25 to 28</td><td>4</td><td>Prime slots</td></tr>
+        <tr><td>Semi Final</td><td>29 to 30</td><td>2</td><td>Evening / Main stage</td></tr>
+        <tr><td>Final</td><td>31</td><td>1</td><td>Grand Final</td></tr>
+      </tbody>
+    </table>
+  </section>
+</body>
+</html>
