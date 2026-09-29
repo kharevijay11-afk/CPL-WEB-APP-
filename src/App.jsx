@@ -145,12 +145,11 @@ const passportPhotoHeight = 480;
 const passportPhotoPadding = 32;
 const passportBackgroundColor = '#ffffff';
 const fixedAdminId = import.meta.env.VITE_ADMIN_ID || 'admin';
-const fixedAdminPassword = import.meta.env.VITE_ADMIN_PASSWORD || '';
 const fixedAdminEmail = import.meta.env.VITE_ADMIN_EMAIL || '';
 const fixedSubAdminId = import.meta.env.VITE_SUBADMIN_ID || 'subadmin';
 const fixedSubAdminPassword = import.meta.env.VITE_SUBADMIN_PASSWORD || '';
 const fixedScorerId = import.meta.env.VITE_SCORER_ID || 'scorer';
-const fixedScorerPassword = import.meta.env.VITE_SCORER_PASSWORD || '';
+const fixedScorerEmail = import.meta.env.VITE_SCORER_EMAIL || 'scorer@cpl.com';
 const sharedVisitorCounterKey = 'visitor_count';
 const sharedVisitorSessionKey = 'cpl-shared-visitor-counted';
 
@@ -812,7 +811,7 @@ async function saveGatePassword(configKey, nextPassword) {
 }
 
 function readAdminGatePassword() {
-  return readGatePassword('admin_password', fixedAdminPassword);
+  return readGatePassword('admin_password', '');
 }
 
 function readSubAdminGatePassword() {
@@ -2537,15 +2536,24 @@ function ScorerLogin({ setMessage, onSuccess, compact = false }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!fixedScorerPassword) {
-      setMessage('Scorer password config missing hai. .env ya hosting environment me VITE_SCORER_PASSWORD set karo.');
+    if (!fixedScorerEmail) {
+      setMessage('Scorer email config missing hai. hosting environment me VITE_SCORER_EMAIL set karo.');
       return;
     }
-    if (scorerId.trim().toLowerCase() !== fixedScorerId || password !== fixedScorerPassword) {
+    if (scorerId.trim().toLowerCase() !== fixedScorerId) {
       setMessage('Invalid scorer ID or password.');
       return;
     }
+    setBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: fixedScorerEmail,
+      password
+    });
     setBusy(false);
+    if (error) {
+      setMessage('Supabase scorer user ready nahi hai. Supabase Auth me scorer email aur password set karo.');
+      return;
+    }
     onSuccess?.();
   }
 
@@ -2563,7 +2571,7 @@ function ScorerLogin({ setMessage, onSuccess, compact = false }) {
         <Activity size={18} />
         {busy ? 'Signing in...' : 'Sign in'}
       </button>
-      <p className="empty-text">Scorer ID: <strong>{fixedScorerId}</strong>. Password private environment config me set rahega.</p>
+      <p className="empty-text">Scorer ID: <strong>{fixedScorerId}</strong>. Password Supabase Auth se verify hoga.</p>
     </form>
   );
 
@@ -2588,18 +2596,18 @@ function AdminLogin({ setMessage, onSuccess, compact = false }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!fixedAdminEmail || !fixedAdminPassword) {
-      setMessage('Admin auth config missing hai. .env ya hosting environment me VITE_ADMIN_EMAIL aur VITE_ADMIN_PASSWORD set karo.');
+    if (!fixedAdminEmail) {
+      setMessage('Admin auth config missing hai. hosting environment me VITE_ADMIN_EMAIL set karo.');
       return;
     }
     const loginId = adminId.trim().toLowerCase();
     setBusy(true);
     const roleConfig = loginId === fixedAdminId
-      ? { role: 'admin', savedPassword: await readAdminGatePassword() }
+      ? { role: 'admin' }
       : loginId === fixedSubAdminId
         ? { role: 'subadmin', savedPassword: await readSubAdminGatePassword() }
         : null;
-    if (!roleConfig || password !== roleConfig.savedPassword) {
+    if (!roleConfig || (roleConfig.savedPassword && password !== roleConfig.savedPassword)) {
       setBusy(false);
       setMessage('Invalid admin ID or password.');
       return;
@@ -2607,11 +2615,11 @@ function AdminLogin({ setMessage, onSuccess, compact = false }) {
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email: fixedAdminEmail,
-      password: fixedAdminPassword
+      password
     });
     setBusy(false);
     if (error) {
-      setMessage('Supabase admin user not ready. VITE_ADMIN_EMAIL/VITE_ADMIN_PASSWORD ko Supabase Auth user se match karo.');
+      setMessage('Invalid admin ID or password. Supabase Auth me admin email/password check karo.');
       return;
     }
 
