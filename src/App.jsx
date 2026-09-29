@@ -2061,12 +2061,9 @@ function PublicWebsite({
             <a href="#match-schedule" onClick={closeMobileMenu}>Match Schedule</a>
             <a href="#photos" onClick={closeMobileMenu}>Photos</a>
             <a href="#contact" onClick={closeMobileMenu}>Contact</a>
-            <button type="button" onClick={() => { closeMobileMenu(); setView('scoring'); }}>Match Scoring</button>
+            <button type="button" onClick={() => { closeMobileMenu(); setView('scorer-login'); }}>Match Scoring</button>
           </nav>
           <div className="public-actions">
-            <button className="ghost-button inline small" onClick={() => { closeMobileMenu(); setView('scorer-login'); }}>
-              <Activity size={15} /> Scorer Login
-            </button>
             <button className="primary-button small" onClick={() => { closeMobileMenu(); setView('login'); }}>
               <KeyRound size={15} /> Login
             </button>
@@ -7089,6 +7086,9 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
   const teamB = teams.find((team) => team.id === activeMatch?.team_b_id);
   const currentOver = Math.floor(currentSummary.legalBalls / 6);
   const currentBall = currentSummary.legalBalls % 6;
+  const latestCurrentInningsBall = currentInningsBalls[currentInningsBalls.length - 1];
+  const visibleOverNo = latestCurrentInningsBall ? toNumber(latestCurrentInningsBall.over_no) : currentOver;
+  const visibleOverBalls = currentInningsBalls.filter((ball) => toNumber(ball.over_no) === visibleOverNo);
   const target = toNumber(activeMatch?.target);
   const runsNeeded = currentInningsNo === 2 && target ? Math.max(0, target - currentSummary.totalRuns) : 0;
   const ballsLeft = currentInningsNo === 2
@@ -7154,6 +7154,33 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
 
   function teamName(teamId) {
     return teams.find((team) => team.id === Number(teamId))?.team_name || '-';
+  }
+
+  function scoreBallLabel(ball) {
+    if (ball.wicket_type) return 'W';
+    if (ball.extra_type === 'Wide') return 'Wd';
+    if (ball.extra_type === 'No Ball') return 'Nb';
+    if (ball.extra_type === 'Bye') return 'B';
+    if (ball.extra_type === 'Leg Bye') return 'Lb';
+    return String(toNumber(ball.runs));
+  }
+
+  function scoreBallTone(ball) {
+    if (ball.wicket_type) return 'wicket';
+    if (ball.extra_type) return 'extra';
+    const runs = toNumber(ball.runs);
+    if (runs === 4) return 'four';
+    if (runs === 6) return 'six';
+    return 'run';
+  }
+
+  function scoreBallTitle(ball) {
+    const label = ball.wicket_type
+      ? `Wicket: ${ball.wicket_type}`
+      : ball.extra_type
+        ? `${ball.extra_type} +${toNumber(ball.extra_runs)}`
+        : `${toNumber(ball.runs)} run`;
+    return `Over ${toNumber(ball.over_no) + 1}, ball ${toNumber(ball.ball_no)}: ${label}`;
   }
 
   function battingCards(teamId, inningsNo) {
@@ -7575,6 +7602,26 @@ function MatchScoring({ tournament, selectedTournamentId, teams, players, settin
                 <button type="button" className="success-button" disabled={activeMatch.status === 'Completed'} onClick={closeOrNextInnings}>
                   {currentInningsNo === 1 ? 'Start Second Innings' : 'Complete Match'}
                 </button>
+              </div>
+
+              <div className="current-over-panel" aria-label="Current over ball by ball">
+                <div className="current-over-header">
+                  <span>Current Over</span>
+                  <strong>{visibleOverBalls.length ? `Over ${visibleOverNo + 1}` : 'No Ball Yet'}</strong>
+                </div>
+                <div className="current-over-balls">
+                  {visibleOverBalls.length ? visibleOverBalls.map((ball) => (
+                    <span
+                      key={ball.id}
+                      className={classNames('current-over-ball', `current-over-ball-${scoreBallTone(ball)}`)}
+                      title={scoreBallTitle(ball)}
+                    >
+                      {scoreBallLabel(ball)}
+                    </span>
+                  )) : (
+                    <span className="current-over-empty">Scoring button click karne par yahan ball circle dikhega.</span>
+                  )}
+                </div>
               </div>
             </div>
           )}
