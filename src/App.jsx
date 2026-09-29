@@ -1111,6 +1111,7 @@ function MainApp() {
   const [adminSession, setAdminSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminRole, setAdminRole] = useState(() => sessionStorage.getItem('cpl-admin-role') || 'admin');
+  const [scorerSession, setScorerSession] = useState(() => sessionStorage.getItem('cpl-scorer-session') === 'active');
   const [tournaments, setTournaments] = useState([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState(() => {
     const saved = localStorage.getItem('cpl-selected-tournament-id');
@@ -1493,12 +1494,20 @@ function MainApp() {
       onBack={goBackView}
       adminSession={adminSession}
       adminRole={adminRole}
+      scorerSession={scorerSession}
       playerSession={playerSession}
       ownerSession={ownerSession}
       tournaments={tournaments}
       selectedTournamentId={selectedTournamentId}
       selectTournament={selectTournament}
       logoutAdmin={logoutAdmin}
+      logoutScorer={() => {
+        sessionStorage.removeItem('cpl-scorer-session');
+        sessionStorage.removeItem('cpl-admin-role');
+        setScorerSession(false);
+        setAdminRole('admin');
+        navigateView('home', { replace: true, resetHistory: true });
+      }}
       logoutPlayer={logoutPlayer}
       logoutOwner={logoutOwner}
     >
@@ -1513,6 +1522,7 @@ function MainApp() {
           setPlayerSession={setPlayerSession}
           setOwnerSession={setOwnerSession}
           setAdminRole={setAdminRole}
+          setScorerSession={setScorerSession}
         />
       )}
 
@@ -1525,6 +1535,7 @@ function MainApp() {
           setPlayerSession={setPlayerSession}
           setOwnerSession={setOwnerSession}
           setAdminRole={setAdminRole}
+          setScorerSession={setScorerSession}
         />
       )}
 
@@ -1639,7 +1650,7 @@ function MainApp() {
           players={players}
           settings={settings}
           setMessage={setMessage}
-          canEdit={adminSession && isAdmin}
+          canEdit={(adminSession && isAdmin) || scorerSession}
         />
       )}
 
@@ -1667,17 +1678,19 @@ function Shell({
   onBack,
   adminSession,
   adminRole = 'admin',
+  scorerSession = false,
   playerSession,
   ownerSession,
   tournaments = [],
   selectedTournamentId,
   selectTournament,
   logoutAdmin,
+  logoutScorer,
   logoutPlayer,
   logoutOwner
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const isScorer = adminSession && adminRole === 'scorer';
+  const isScorer = scorerSession || (adminSession && adminRole === 'scorer');
   const nav = [
     { key: 'home', label: 'Home', icon: Trophy },
     !isScorer && { key: 'login', label: 'Login', icon: KeyRound },
@@ -1748,9 +1761,14 @@ function Shell({
           </div>
         </div>
 
-        {adminSession && (
+        {isScorer && (
+          <button className="ghost-button" onClick={logoutScorer || logoutAdmin}>
+            <LogOut size={17} /> Scorer logout
+          </button>
+        )}
+        {adminSession && !isScorer && (
           <button className="ghost-button" onClick={logoutAdmin}>
-            <LogOut size={17} /> {isScorer ? 'Scorer logout' : 'Admin logout'}
+            <LogOut size={17} /> Admin logout
           </button>
         )}
         {playerSession && (
@@ -2431,7 +2449,8 @@ function LoginHub({
   setView,
   setPlayerSession,
   setOwnerSession,
-  setAdminRole
+  setAdminRole,
+  setScorerSession
 }) {
   const [tab, setTab] = useState(defaultTab);
   const tabs = [
@@ -2498,7 +2517,9 @@ function LoginHub({
             compact
             setMessage={setMessage}
             onSuccess={() => {
+              sessionStorage.setItem('cpl-scorer-session', 'active');
               sessionStorage.setItem('cpl-admin-role', 'scorer');
+              setScorerSession?.(true);
               setAdminRole?.('scorer');
               setView('scoring', { replace: true });
             }}
@@ -2520,37 +2541,11 @@ function ScorerLogin({ setMessage, onSuccess, compact = false }) {
       setMessage('Scorer password config missing hai. .env ya hosting environment me VITE_SCORER_PASSWORD set karo.');
       return;
     }
-    if (!fixedAdminEmail || !fixedAdminPassword) {
-      setMessage('Admin auth config missing hai. .env ya hosting environment me VITE_ADMIN_EMAIL aur VITE_ADMIN_PASSWORD set karo.');
-      return;
-    }
     if (scorerId.trim().toLowerCase() !== fixedScorerId || password !== fixedScorerPassword) {
       setMessage('Invalid scorer ID or password.');
       return;
     }
-
-    setBusy(true);
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: fixedAdminEmail,
-      password: fixedAdminPassword
-    });
     setBusy(false);
-    if (error) {
-      setMessage('Supabase admin user not ready. VITE_ADMIN_EMAIL/VITE_ADMIN_PASSWORD ko Supabase Auth user se match karo.');
-      return;
-    }
-
-    const { data: adminUser, error: adminError } = await supabase
-      .from('admin_users')
-      .select('id')
-      .eq('user_id', data.session.user.id)
-      .maybeSingle();
-
-    if (!adminUser || adminError) {
-      await supabase.auth.signOut();
-      setMessage('Configured admin user ko admin_users table me add karo, phir scorer login chalega.');
-      return;
-    }
     onSuccess?.();
   }
 
